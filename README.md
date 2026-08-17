@@ -5,7 +5,7 @@ Hệ thống Bot Telegram tự động theo dõi và kiểm tra tình trạng SI
 ---
 
 ## 📂 Cấu trúc thư mục:
-- `bot.py`: Mã nguồn chính của Telegram Bot (Long-polling, Scheduler, Watchlist Manager, Buttons).
+- `app.py`: Mã nguồn chính của Telegram Bot (Long-polling, Scheduler, Watchlist Manager, Buttons).
 - `simchecker.py`: Module tra cứu API ngầm tốc độ cao của 4 nhà mạng.
 - `config.json`: Cấu hình Bot Token, Admin Chat ID, lịch hẹn giờ và delay an toàn.
 - `sim_watchlist.json`: Cơ sở dữ liệu danh sách số điện thoại theo từng nhà mạng.
@@ -20,7 +20,7 @@ Hệ thống Bot Telegram tự động theo dõi và kiểm tra tình trạng SI
 1. Mở file `config.json`, điền Telegram Bot Token vào `bot_token` (hoặc cấu hình qua biến môi trường `BOT_TOKEN` khi deploy Cloud).
 2. Khởi động bot bằng lệnh:
    ```bash
-   python bot.py
+   python app.py
    ```
 
 ---
