@@ -1,7 +1,7 @@
 """
 Telegram Bot SIM Checker for 4 Major Vietnamese Carriers:
 Viettel, MobiFone, VinaPhone, Vietnamobile
-Interactive Buttons Support (Reply Keyboards & Inline Buttons)
+Clean & Grouped Summary Report Layout (Carrier-grouped Available & Unavailable)
 Zero External Dependencies (Uses Built-in HTTP Long-Polling)
 """
 
@@ -167,26 +167,11 @@ class TelegramBot:
         return {
             "keyboard": [
                 [{"text": "🚀 Quét Toàn Bộ SIM"}, {"text": "📋 Xem Danh Sách"}],
-                [{"text": "➕ Hướng Dẫn Thêm Số"}, {"text": "🗑 Hướng Dẫn Xóa Số"}],
+                [{"text": "➕ Thêm Số Theo Dõi"}, {"text": "🗑 Xóa Số"}],
                 [{"text": "⏰ Cài Đặt Hẹn Giờ"}, {"text": "⚙️ Trạng Thái Bot"}]
             ],
             "resize_keyboard": True,
             "persistent": True
-        }
-
-    def get_inline_action_keyboard(self) -> Dict[str, Any]:
-        """Create inline buttons for quick actions under messages."""
-        return {
-            "inline_keyboard": [
-                [
-                    {"text": "🚀 Bắt Đầu Quét Ngay", "callback_data": "action_scan"},
-                    {"text": "📋 Xem Danh Sách", "callback_data": "action_list"}
-                ],
-                [
-                    {"text": "⚙️ Trạng Thái & Lịch", "callback_data": "action_status"},
-                    {"text": "❓ Hướng Dẫn Chi Tiết", "callback_data": "action_help"}
-                ]
-            ]
         }
 
     def send_message(self, chat_id: int | str, text: str, reply_markup: Optional[Dict[str, Any]] = None, parse_mode: str = "HTML") -> bool:
@@ -242,46 +227,45 @@ class TelegramBot:
         clean_text = text.strip()
         print(f"[+] User {chat_id} sent: {clean_text}")
 
-        # Map Button labels to commands
         if clean_text in ["🚀 Quét Toàn Bộ SIM", "Quét Ngay"]:
             self.handle_command(chat_id, "/scan", [])
         elif clean_text in ["📋 Xem Danh Sách", "Danh Sách"]:
             self.handle_command(chat_id, "/list", [])
-        elif clean_text in ["➕ Hướng Dẫn Thêm Số", "Thêm Số"]:
+        elif clean_text in ["➕ Thêm Số Theo Dõi", "➕ Hướng Dẫn Thêm Số", "Thêm Số"]:
             msg = (
                 "➕ <b>CÁCH THÊM SỐ VÀO DANH SÁCH THEO DÕI:</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                "👉 Gửi lệnh kèm danh sách số:\n"
+                "👉 <b>Gửi lệnh:</b>\n"
                 "▫ <code>/add viettel 0981945794 0365141705</code>\n"
                 "▫ <code>/add mobifone 0703608734</code>\n"
                 "▫ <code>/add vinaphone 0812225033</code>\n"
                 "▫ <code>/add vietnamobile 0564441185</code>\n\n"
-                "💡 <i>Bạn cũng có thể chỉ cần gửi <code>/add &lt;danh_sách_số&gt;</code> bot sẽ tự động nhận diện đúng nhà mạng!</i>"
+                "💡 <i>Bạn cũng có thể chỉ gửi <code>/add 0981945794...</code> bot sẽ tự nhận diện nhà mạng!</i>"
             )
-            self.send_message(chat_id, msg)
-        elif clean_text in ["🗑 Hướng Dẫn Xóa Số", "Xóa Số"]:
+            self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
+        elif clean_text in ["🗑 Xóa Số", "🗑 Hướng Dẫn Xóa Số", "Xóa"]:
             msg = (
                 "🗑 <b>CÁCH XÓA SỐ KHỎI THEO DÕI:</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                "👉 Gửi lệnh:\n"
+                "👉 <b>Gửi lệnh:</b>\n"
                 "▫ <code>/del 0981945794</code>\n"
                 "▫ Hoặc xóa nhiều số: <code>/del 0981945794 0703608734</code>"
             )
-            self.send_message(chat_id, msg)
+            self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
         elif clean_text in ["⏰ Cài Đặt Hẹn Giờ", "Hẹn Giờ"]:
             times = ", ".join([f"<code>{t}</code>" for t in self.config.get("scheduled_times", [])])
             interval = self.config.get("interval_minutes", 0)
             msg = (
                 "⏰ <b>CÀI ĐẶT LẬP LỊCH QUÉT TỰ ĐỘNG:</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                f"🕒 <b>Mốc giờ quét mỗi ngày hiện tại:</b> {times}\n"
+                f"🕒 <b>Mốc giờ quét mỗi ngày:</b> {times}\n"
                 f"🔄 <b>Quét định kỳ:</b> {interval} phút/lần\n\n"
-                "👉 <b>Cách thay đổi:</b>\n"
-                "▫ Đổi giờ quét cố định: <code>/set_time 08:00, 12:00, 19:30</code>\n"
-                "▫ Quét lặp lại mỗi X phút: <code>/set_interval 30</code> (hoặc <code>/set_interval 0</code> để tắt)\n"
-                "▫ Cài đặt delay an toàn: <code>/set_delay 2.0</code>"
+                "👉 <b>Cách điều chỉnh:</b>\n"
+                "▫ Đổi mốc giờ: <code>/set_time 08:00, 12:00, 19:30</code>\n"
+                "▫ Quét mỗi X phút: <code>/set_interval 30</code> (hoặc <code>0</code> để tắt)\n"
+                "▫ Đặt delay: <code>/set_delay 2.0</code>"
             )
-            self.send_message(chat_id, msg)
+            self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
         elif clean_text in ["⚙️ Trạng Thái Bot", "Trạng Thái"]:
             self.handle_command(chat_id, "/status", [])
         elif clean_text.startswith("/"):
@@ -290,7 +274,6 @@ class TelegramBot:
             args = parts[1:]
             self.handle_command(chat_id, cmd, args)
         elif re.match(r'^0\d{9}$', clean_text):
-            # Quick check if user just sent a 10-digit number
             self.handle_command(chat_id, "/check", [clean_text])
         else:
             self.handle_command(chat_id, "/start", [])
@@ -301,19 +284,21 @@ class TelegramBot:
 
         if cmd in ["/start", "/help"]:
             help_text = (
-                "🤖 <b>CHÀO MỪNG BẠN ĐẾN VỚI BOT CHECK SIM 4 NHÀ MẠNG!</b>\n"
-                "<i>(Hỗ trợ Viettel • MobiFone • VinaPhone • Vietnamobile)</i>\n\n"
-                "🔘 <i>Bạn có thể bấm trực tiếp các nút bấm ở thanh điều khiển bên dưới hoặc dùng lệnh:</i>\n\n"
-                "📋 <b>Các lệnh nhanh:</b>\n"
-                "▫ <code>/scan</code> — Bắt đầu quét kiểm tra toàn bộ danh sách\n"
+                "🤖 <b>BOT CHECK SIM 4 NHÀ MẠNG TỰ ĐỘNG</b>\n"
+                "<i>(Viettel • MobiFone • VinaPhone • Vietnamobile)</i>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "📋 <b>Danh sách lệnh điều khiển:</b>\n\n"
+                "▫ <code>/scan</code> — Quét toàn bộ danh sách theo dõi ngay\n"
                 "▫ <code>/list</code> — Xem danh sách các số đang theo dõi\n"
-                "▫ <code>/check &lt;số&gt;</code> — Kiểm tra nhanh 1 số bất kỳ\n"
+                "▫ <code>/check &lt;số&gt;</code> — Kiểm tra ngay 1 số bất kỳ\n"
                 "▫ <code>/add &lt;mạng&gt; &lt;số&gt;</code> — Thêm số vào theo dõi\n"
                 "▫ <code>/del &lt;số&gt;</code> — Xóa số khỏi theo dõi\n"
+                "▫ <code>/set_time &lt;HH:MM...&gt;</code> — Hẹn giờ quét tự động hàng ngày\n"
+                "▫ <code>/set_interval &lt;phút&gt;</code> — Quét định kỳ lặp lại\n"
+                "▫ <code>/set_delay &lt;giây&gt;</code> — Cài đặt delay an toàn\n"
                 "▫ <code>/status</code> — Xem trạng thái hệ thống"
             )
             self.send_message(chat_id, help_text, reply_markup=self.get_main_keyboard())
-            self.send_message(chat_id, "👇 <b>Bấm nút bên dưới để thao tác nhanh:</b>", reply_markup=self.get_inline_action_keyboard())
 
         elif cmd == "/list":
             watchlist = WatchlistManager.load()
@@ -519,7 +504,7 @@ class TelegramBot:
             self.send_message(chat_id, status_text, reply_markup=self.get_main_keyboard())
 
     def run_full_scan(self, initiator_chat_id: Optional[int | str] = None):
-        """Execute full scan of all watchlisted numbers and alert immediately."""
+        """Execute full scan and send carrier-grouped summary report."""
         self.is_scanning = True
         watchlist = WatchlistManager.load()
         delay = self.config.get("delay_seconds", 1.5)
@@ -550,49 +535,49 @@ class TelegramBot:
                 hits.append(res)
                 first_item = res["items"][0]
                 print(f"  [+] HIT: {num} [{carrier}] - {first_item['price']}")
-                
-                # IMMEDIATE ALERT NOTIFICATION
-                alert_text = (
-                    "🚨 <b>BÁO ĐỘNG: PHÁT HIỆN SIM CÒN BÁN TRÊN KHO!</b>\n"
-                    "━━━━━━━━━━━━━━━━━━\n"
-                    f"📱 <b>Số SIM:</b> <code>{first_item['phone']}</code>\n"
-                    f"🏢 <b>Nhà mạng:</b> <b>{carrier}</b>\n"
-                    f"🏷 <b>Gói/Loại:</b> {first_item.get('type', 'N/A')}\n"
-                    f"💰 <b>Giá bán:</b> {first_item['price']}\n"
-                    f"⏰ <b>Thời gian:</b> <code>{datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</code>\n"
-                    "━━━━━━━━━━━━━━━━━━\n"
-                    "⚡ <i>Hãy vào trang chủ nhà mạng mua ngay!</i>"
-                )
-                self.broadcast(alert_text, reply_markup=self.get_main_keyboard())
             else:
                 bads.append(res)
 
-        # Summary Report
+        # Summary Header
         summary_lines = [
             "📊 <b>BÁO CÁO KẾT QUẢ QUÉT SIM TỔNG HỢP</b>",
             f"⏰ <i>Thời gian: {datetime.datetime.now().strftime('%H:%M:%S - %d/%m/%Y')}</i>",
             "━━━━━━━━━━━━━━━━━━",
             f"▫ Tổng số đã quét: <b>{len(total_sims)}</b> SIM",
             f"▫ Số SIM CÒN BÁN: <b>{len(hits)}</b> SIM",
-            f"▫ Số SIM ĐÃ BÁN: <b>{len(bads)}</b> SIM\n"
+            f"▫ Số SIM CHƯA CÓ / LỖI: <b>{len(bads)}</b> SIM\n"
         ]
 
+        # 1. PHẦN 1: CÓ TRONG KHO (NHÓM THEO NHÀ MẠNG)
         if hits:
-            summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN:</b>")
-            for h in hits:
-                item = h["items"][0]
-                summary_lines.append(f" • <code>{item['phone']}</code> [{h['carrier']}]: {item['price']}")
-            summary_lines.append("")
+            summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>\n")
+            for c_key in ["VIETTEL", "MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
+                c_hits = [h for h in hits if h.get("carrier") == c_key]
+                if c_hits:
+                    summary_lines.append(f"📱 <b>{c_key}:</b>")
+                    for h in c_hits:
+                        item = h["items"][0]
+                        type_str = f" ({item.get('type')})" if item.get('type') else ""
+                        summary_lines.append(f" • <code>{item['phone']}</code>: {item['price']}{type_str}")
+                    summary_lines.append("")
+        else:
+            summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>")
+            summary_lines.append("<i>(Hiện tại chưa có SIM nào trong kho)</i>\n\n")
 
+        # 2. PHẦN 2: CHƯA CÓ TRONG KHO (NHÓM THEO NHÀ MẠNG)
         if bads:
-            summary_lines.append("❌ <b>DANH SÁCH SIM KHÔNG CÓ TRONG KHO:</b>")
-            for b in bads:
-                note_str = b.get("note") or b.get("error") or "Không có trong kho hoặc đã được bán"
-                summary_lines.append(f" • <code>{b['phone']}</code> [{b.get('carrier', 'UNKNOWN')}]: <i>{note_str}</i>")
-            summary_lines.append("")
-
-        if not hits and not bads:
-            summary_lines.append("ℹ️ <i>Không có dữ liệu quét.</i>\n")
+            summary_lines.append("❌ <b>DANH SÁCH SIM CHƯA CÓ TRONG KHO / LỖI TRUY VẤN:</b>\n")
+            for c_key in ["VIETTEL", "MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
+                c_bads = [b for b in bads if b.get("carrier") == c_key]
+                if c_bads:
+                    summary_lines.append(f"📱 <b>{c_key}:</b>")
+                    for b in c_bads:
+                        raw_note = b.get("note") or b.get("error") or "Không có trong kho"
+                        clean_note = re.sub(r'\(.*?\)', '', raw_note).strip()
+                        if not clean_note:
+                            clean_note = "Không có trong kho"
+                        summary_lines.append(f" • <code>{b['phone']}</code>: <i>{clean_note}</i>")
+                    summary_lines.append("")
 
         summary_lines.append("━━━━━━━━━━━━━━━━━━")
         report_msg = "\n".join(summary_lines)

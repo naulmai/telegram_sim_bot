@@ -70,7 +70,7 @@ class ViettelApiChecker:
             self.session.proxies = {"http": proxy, "https": proxy}
 
     def _query(self, search_key: str, isdn_type: str) -> Dict[str, Any]:
-        """Query Viettel API for a specific isdn_type."""
+        """Query Viettel API for a specific isdn_type without blocking."""
         params = {
             "isdn_type": isdn_type,
             "page_type": "",
@@ -85,32 +85,33 @@ class ViettelApiChecker:
         try:
             response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=8)
             if response.status_code != 200:
-                return {"items": [], "error": f"HTTP {response.status_code}"}
+                return {"items": [], "error": f"HTTP {response.status_code}", "note": f"Lỗi kết nối HTTP {response.status_code}"}
 
             data = response.json()
             msg = data.get("message", "")
+            err_code_tracing = data.get("errorCodeTracing", "")
             
-            if "vượt quá hạn mức" in msg or data.get("errorCodeTracing") == "ERR_000505":
-                return {"items": [], "rate_limited": True, "note": "Hạn mức IP Viettel bị tạm khóa (vui lòng đợi 3-5 phút)"}
+            if "vượt quá hạn mức" in msg or err_code_tracing == "ERR_000505":
+                return {"items": [], "rate_limited": True, "note": "Bị giới hạn IP"}
 
             if "quá nhanh" in msg or "vui lòng chờ" in msg:
-                return {"items": [], "rate_limited": True, "note": "Viettel yêu cầu giãn cách thao tác"}
+                return {"items": [], "rate_limited": True, "note": "Thao tác quá nhanh"}
 
             if data.get("errorCode") == 0:
                 return {"items": data.get("data") or [], "rate_limited": False}
 
-            return {"items": [], "rate_limited": False, "note": msg}
+            return {"items": [], "rate_limited": False, "note": msg or "Không tìm thấy dữ liệu"}
 
         except Exception as e:
-            return {"items": [], "rate_limited": False, "error": str(e)}
+            return {"items": [], "rate_limited": False, "error": str(e), "note": f"Lỗi mạng: {e}"}
 
     def search_sim(self, clean_num: str) -> Dict[str, Any]:
-        """Check Viettel SIM with safe delay between Prepaid and Postpaid checks."""
+        """Check Viettel SIM in 2 steps: Step 1 (Prepaid) -> Step 2 (Postpaid)."""
         rate_limit_notes = []
 
         # --- 1. CHECK KHO TRẢ TRƯỚC (isdn_type=2) ---
         res_pre = self._query(clean_num, isdn_type="2")
-        if res_pre.get("rate_limited"):
+        if res_pre.get("rate_limited") or res_pre.get("error"):
             rate_limit_notes.append(res_pre.get("note", ""))
 
         for item in res_pre.get("items", []):
@@ -135,13 +136,12 @@ class ViettelApiChecker:
                     }]
                 }
 
-        # Áp dụng delay an toàn trước khi check kho Trả sau
+        # --- 2. CHECK KHO TRẢ SAU (isdn_type=1) ---
         if self.delay > 0:
             time.sleep(self.delay)
 
-        # --- 2. CHECK KHO TRẢ SAU (isdn_type=1) ---
         res_pos = self._query(clean_num, isdn_type="1")
-        if res_pos.get("rate_limited"):
+        if res_pos.get("rate_limited") or res_pos.get("error"):
             rate_limit_notes.append(res_pos.get("note", ""))
 
         for item in res_pos.get("items", []):
@@ -170,10 +170,11 @@ class ViettelApiChecker:
                     }]
                 }
 
+        # If any step was blocked by Viettel IP limitation or rate limit, report it clearly
         if rate_limit_notes:
             return {"phone": clean_num, "carrier": "VIETTEL", "available": False, "note": rate_limit_notes[0]}
 
-        return {"phone": clean_num, "carrier": "VIETTEL", "available": False, "note": "Số không có trong kho (đã kiểm tra cả Trả trước & Trả sau)"}
+        return {"phone": clean_num, "carrier": "VIETTEL", "available": False, "note": "Không có trong kho"}
 
 
 class MobifoneApiChecker:
