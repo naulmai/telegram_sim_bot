@@ -1,0 +1,12 @@
+{
+  "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "admin_chat_ids": [],
+  "delay_seconds": 1.5,
+  "scheduled_times": [
+    "08:00",
+    "12:00",
+    "19:00"
+  ],
+  "interval_minutes": 0,
+  "auto_scan_enabled": true
+}
