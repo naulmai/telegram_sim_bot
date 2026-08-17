@@ -582,8 +582,17 @@ class TelegramBot:
             for h in hits:
                 item = h["items"][0]
                 summary_lines.append(f" • <code>{item['phone']}</code> [{h['carrier']}]: {item['price']}")
-        else:
-            summary_lines.append("ℹ️ <i>Hiện tại chưa có SIM nào trong danh sách được mở bán lại.</i>")
+            summary_lines.append("")
+
+        if bads:
+            summary_lines.append("❌ <b>DANH SÁCH SIM KHÔNG CÓ TRONG KHO:</b>")
+            for b in bads:
+                note_str = b.get("note") or b.get("error") or "Không có trong kho hoặc đã được bán"
+                summary_lines.append(f" • <code>{b['phone']}</code> [{b.get('carrier', 'UNKNOWN')}]: <i>{note_str}</i>")
+            summary_lines.append("")
+
+        if not hits and not bads:
+            summary_lines.append("ℹ️ <i>Không có dữ liệu quét.</i>\n")
 
         summary_lines.append("━━━━━━━━━━━━━━━━━━")
         report_msg = "\n".join(summary_lines)
