@@ -528,100 +528,112 @@ class TelegramBot:
 
     def run_full_scan(self, initiator_chat_id: Optional[int | str] = None):
         """Execute full scan and send carrier-grouped summary report."""
-        self.is_scanning = True
-        watchlist = WatchlistManager.load()
-        delay = self.config.get("delay_seconds", 1.5)
-        proxy = self.config.get("proxy")
-        hub = SimCheckerHub(proxy=proxy, delay=delay)
-
-        total_sims = []
-        for carrier, nums in watchlist.items():
-            for num in nums:
-                total_sims.append({"phone": num, "carrier": carrier})
-
-        if not total_sims:
-            if initiator_chat_id:
-                self.send_message(initiator_chat_id, "⚠️ Danh sách theo dõi đang trống! Hãy dùng <code>/add</code> để thêm số.", reply_markup=self.get_main_keyboard())
-            self.is_scanning = False
+        if self.is_scanning:
+            print("[!] Scan already in progress, skipping duplicate scan request.")
             return
 
-        hits = []
-        bads = []
+        self.is_scanning = True
+        try:
+            watchlist = WatchlistManager.load()
+            delay = self.config.get("delay_seconds", 1.5)
+            proxy = self.config.get("proxy")
+            hub = SimCheckerHub(proxy=proxy, delay=delay)
 
-        print(f"[*] Starting scan of {len(total_sims)} SIMs at {datetime.datetime.now().strftime('%H:%M:%S')}...")
+            total_sims = []
+            for carrier, nums in watchlist.items():
+                for num in nums:
+                    total_sims.append({"phone": num, "carrier": carrier})
 
-        for idx, item in enumerate(total_sims, 1):
-            num = item["phone"]
-            carrier = item["carrier"]
-            res = hub.check_sim(num, specified_carrier=carrier)
+            if not total_sims:
+                if initiator_chat_id:
+                    self.send_message(initiator_chat_id, "⚠️ Danh sách theo dõi đang trống! Hãy dùng <code>/add</code> để thêm số.", reply_markup=self.get_main_keyboard())
+                else:
+                    print("[!] Scheduled scan triggered but watchlist is empty.")
+                return
 
-            if res.get("available"):
-                hits.append(res)
-                first_item = res["items"][0]
-                print(f"  [+] HIT: {num} [{carrier}] - {first_item['price']}")
+            hits = []
+            bads = []
+
+            print(f"[*] Starting scan of {len(total_sims)} SIMs at {datetime.datetime.now().strftime('%H:%M:%S')}...")
+
+            for idx, item in enumerate(total_sims, 1):
+                num = item["phone"]
+                carrier = item["carrier"]
+                res = hub.check_sim(num, specified_carrier=carrier)
+
+                if res.get("available"):
+                    hits.append(res)
+                    first_item = res["items"][0]
+                    print(f"  [+] HIT: {num} [{carrier}] - {first_item['price']}")
+                else:
+                    bads.append(res)
+
+            # Summary Header
+            summary_lines = [
+                "📊 <b>BÁO CÁO KẾT QUẢ QUÉT SIM TỔNG HỢP</b>",
+                f"⏰ <i>Thời gian: {datetime.datetime.now().strftime('%H:%M:%S - %d/%m/%Y')}</i>",
+                "━━━━━━━━━━━━━━━━━━",
+                f"▫ Tổng số đã quét: <b>{len(total_sims)}</b> SIM",
+                f"▫ Số SIM CÒN BÁN: <b>{len(hits)}</b> SIM",
+                f"▫ Số SIM CHƯA CÓ / LỖI: <b>{len(bads)}</b> SIM\n"
+            ]
+
+            # 1. PHẦN 1: CÓ TRONG KHO (NHÓM THEO NHÀ MẠNG)
+            if hits:
+                summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>\n")
+                for c_key in ["VIETTEL", "MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
+                    c_hits = [h for h in hits if h.get("carrier") == c_key]
+                    if c_hits:
+                        summary_lines.append(f"📱 <b>{c_key}:</b>")
+                        for h in c_hits:
+                            item = h["items"][0]
+                            raw_type = item.get('type')
+                            clean_type = re.sub(r'<[^>]+>', ' ', str(raw_type)).strip() if raw_type else ""
+                            type_str = f" ({html.escape(clean_type)})" if clean_type else ""
+                            clean_price = html.escape(str(item.get('price', '')))
+                            summary_lines.append(f" • <code>{item['phone']}</code>: {clean_price}{type_str}")
+                        summary_lines.append("")
             else:
-                bads.append(res)
+                summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>")
+                summary_lines.append("<i>(Hiện tại chưa có SIM nào trong kho)</i>\n\n")
 
-        # Summary Header
-        summary_lines = [
-            "📊 <b>BÁO CÁO KẾT QUẢ QUÉT SIM TỔNG HỢP</b>",
-            f"⏰ <i>Thời gian: {datetime.datetime.now().strftime('%H:%M:%S - %d/%m/%Y')}</i>",
-            "━━━━━━━━━━━━━━━━━━",
-            f"▫ Tổng số đã quét: <b>{len(total_sims)}</b> SIM",
-            f"▫ Số SIM CÒN BÁN: <b>{len(hits)}</b> SIM",
-            f"▫ Số SIM CHƯA CÓ / LỖI: <b>{len(bads)}</b> SIM\n"
-        ]
+            # 2. PHẦN 2: CHƯA CÓ TRONG KHO (NHÓM THEO NHÀ MẠNG)
+            if bads:
+                summary_lines.append("❌ <b>DANH SÁCH SIM CHƯA CÓ TRONG KHO / LỖI TRUY VẤN:</b>\n")
+                for c_key in ["VIETTEL", "MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
+                    c_bads = [b for b in bads if b.get("carrier") == c_key]
+                    if c_bads:
+                        summary_lines.append(f"📱 <b>{c_key}:</b>")
+                        for b in c_bads:
+                            raw_note = b.get("note") or b.get("error") or "Không có trong kho"
+                            clean_note = re.sub(r'<[^>]+>', ' ', str(raw_note))
+                            clean_note = re.sub(r'\(.*?\)', '', clean_note).strip()
+                            if not clean_note:
+                                clean_note = "Không có trong kho"
+                            summary_lines.append(f" • <code>{b['phone']}</code>: <i>{html.escape(clean_note)}</i>")
+                        summary_lines.append("")
 
-        # 1. PHẦN 1: CÓ TRONG KHO (NHÓM THEO NHÀ MẠNG)
-        if hits:
-            summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>\n")
-            for c_key in ["VIETTEL", "MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
-                c_hits = [h for h in hits if h.get("carrier") == c_key]
-                if c_hits:
-                    summary_lines.append(f"📱 <b>{c_key}:</b>")
-                    for h in c_hits:
-                        item = h["items"][0]
-                        raw_type = item.get('type')
-                        clean_type = re.sub(r'<[^>]+>', ' ', str(raw_type)).strip() if raw_type else ""
-                        type_str = f" ({html.escape(clean_type)})" if clean_type else ""
-                        clean_price = html.escape(str(item.get('price', '')))
-                        summary_lines.append(f" • <code>{item['phone']}</code>: {clean_price}{type_str}")
-                    summary_lines.append("")
-        else:
-            summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>")
-            summary_lines.append("<i>(Hiện tại chưa có SIM nào trong kho)</i>\n\n")
+            summary_lines.append("━━━━━━━━━━━━━━━━━━")
+            report_msg = "\n".join(summary_lines)
 
-        # 2. PHẦN 2: CHƯA CÓ TRONG KHO (NHÓM THEO NHÀ MẠNG)
-        if bads:
-            summary_lines.append("❌ <b>DANH SÁCH SIM CHƯA CÓ TRONG KHO / LỖI TRUY VẤN:</b>\n")
-            for c_key in ["VIETTEL", "MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
-                c_bads = [b for b in bads if b.get("carrier") == c_key]
-                if c_bads:
-                    summary_lines.append(f"📱 <b>{c_key}:</b>")
-                    for b in c_bads:
-                        raw_note = b.get("note") or b.get("error") or "Không có trong kho"
-                        clean_note = re.sub(r'<[^>]+>', ' ', str(raw_note))
-                        clean_note = re.sub(r'\(.*?\)', '', clean_note).strip()
-                        if not clean_note:
-                            clean_note = "Không có trong kho"
-                        summary_lines.append(f" • <code>{b['phone']}</code>: <i>{html.escape(clean_note)}</i>")
-                    summary_lines.append("")
+            if initiator_chat_id:
+                self.send_message(initiator_chat_id, report_msg, reply_markup=self.get_main_keyboard())
+            else:
+                self.broadcast(report_msg, reply_markup=self.get_main_keyboard())
 
-        summary_lines.append("━━━━━━━━━━━━━━━━━━")
-        report_msg = "\n".join(summary_lines)
+            print(f"[*] Scan finished. Found {len(hits)} available SIMs.")
 
-        if initiator_chat_id:
-            self.send_message(initiator_chat_id, report_msg, reply_markup=self.get_main_keyboard())
-        else:
-            self.broadcast(report_msg, reply_markup=self.get_main_keyboard())
-
-        self.is_scanning = False
-        print(f"[*] Scan finished. Found {len(hits)} available SIMs.")
+        except Exception as e:
+            print(f"[!] Error during run_full_scan: {e}")
+        finally:
+            self.is_scanning = False
 
     def scheduler_loop(self):
         """Background thread for automated scheduled scans."""
         while True:
             try:
+                # Reload config every loop iteration so manual edits to config.json take effect immediately
+                self.config = ConfigManager.load()
                 now = datetime.datetime.now()
                 now_str = now.strftime("%H:%M")
                 
@@ -630,8 +642,8 @@ class TelegramBot:
                 if now_str in scheduled_times and now_str != self.last_checked_minute:
                     self.last_checked_minute = now_str
                     if not self.is_scanning:
-                        print(f"[*] Triggering scheduled scan for {now_str}...")
-                        self.run_full_scan()
+                        print(f"⏰ [Scheduler] Triggering scheduled scan for {now_str}...")
+                        threading.Thread(target=self.run_full_scan, daemon=True).start()
 
                 # Check interval minutes
                 interval_min = self.config.get("interval_minutes", 0)
@@ -640,8 +652,8 @@ class TelegramBot:
                     if elapsed >= interval_min * 60:
                         self.last_interval_scan = time.time()
                         if not self.is_scanning:
-                            print(f"[*] Triggering interval scan (every {interval_min}m)...")
-                            self.run_full_scan()
+                            print(f"🔄 [Scheduler] Triggering interval scan (every {interval_min}m)...")
+                            threading.Thread(target=self.run_full_scan, daemon=True).start()
 
             except Exception as e:
                 print(f"[!] Error in scheduler loop: {e}")
