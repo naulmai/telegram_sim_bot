@@ -3,15 +3,14 @@
 =================================================================
 File nguồn       : list number.txt
 Tổng số đã quét  : 14 SIM
-Số SIM CÒN BÁN   : 3 SIM
-Số SIM ĐÃ BÁN     : 11 SIM
+Số SIM CÒN BÁN   : 2 SIM
+Số SIM ĐÃ BÁN     : 12 SIM
 
 -----------------------------------------------------------------
   DANH SÁCH SIM CÒN BÁN (THEO TỪNG NHÀ MẠNG):
 -----------------------------------------------------------------
 
-[+] VIETTEL (2 SIM còn bán):
-    - 0981945794 | Loại: Trả sau | Giá: 60,000 VNĐ | Cam kết: 100,000 VNĐ/12T
+[+] VIETTEL (1 SIM còn bán):
     - 0365141705 | Loại: Trả trước | Giá: 50,000 VNĐ
 
 [+] MOBIFONE (0 SIM còn bán):

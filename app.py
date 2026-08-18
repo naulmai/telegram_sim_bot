@@ -18,15 +18,21 @@ from curl_cffi import requests
 
 # Import the core SIM checker hub
 from simchecker import SimCheckerHub, CarrierDetector
-from proxy_hunter import ProxyPoolManager
+from proxy_hunter import ProxyPoolManager, set_telegram_notify_callback
 
 # Configuration and Database Filepaths
 CONFIG_FILE = "config.json"
 WATCHLIST_FILE = "sim_watchlist.json"
 
-# Ensure UTF-8 output on Windows console
+import functools
+print = functools.partial(print, flush=True)
+
+# Ensure UTF-8 output on Windows console with line buffering
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    except Exception:
+        pass
 
 
 class ConfigManager:
@@ -165,6 +171,7 @@ class TelegramBot:
         self.is_scanning = False
         self.last_interval_scan = time.time()
         self.last_checked_minute = ""
+        set_telegram_notify_callback(lambda msg: self.broadcast(msg))
 
     @property
     def api_url(self) -> str:
@@ -183,9 +190,39 @@ class TelegramBot:
         }
 
     def send_message(self, chat_id: int | str, text: str, reply_markup: Optional[Dict[str, Any]] = None, parse_mode: str = "HTML") -> bool:
-        """Send formatted message with optional keyboard."""
+        """Send formatted message with optional keyboard, auto-chunking long messages (>4000 chars)."""
         if not self.bot_token or self.bot_token.startswith("YOUR_"):
             return False
+
+        # Telegram message length limit is 4096. Chunk text safely at 4000 chars.
+        if len(text) > 4000:
+            chunks = []
+            curr_chunk = []
+            curr_len = 0
+            for line in text.split("\n"):
+                if curr_len + len(line) + 1 > 3800:
+                    chunks.append("\n".join(curr_chunk))
+                    curr_chunk = [line]
+                    curr_len = len(line)
+                else:
+                    curr_chunk.append(line)
+                    curr_len += len(line) + 1
+            if curr_chunk:
+                chunks.append("\n".join(curr_chunk))
+
+            success = True
+            for idx, ch in enumerate(chunks):
+                # Only attach keyboard to the last chunk
+                markup = reply_markup if idx == len(chunks) - 1 else None
+                res = self._send_single_message(chat_id, ch, reply_markup=markup, parse_mode=parse_mode)
+                if not res:
+                    success = False
+            return success
+
+        return self._send_single_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+
+    def _send_single_message(self, chat_id: int | str, text: str, reply_markup: Optional[Dict[str, Any]] = None, parse_mode: str = "HTML") -> bool:
+        """Helper to send a single message payload to Telegram API."""
         url = f"{self.api_url}/sendMessage"
         payload = {
             "chat_id": chat_id,
@@ -198,9 +235,11 @@ class TelegramBot:
 
         try:
             r = self.session.post(url, json=payload, timeout=10)
-            if r.status_code != 200:
-                print(f"[!] Telegram Send Error ({r.status_code}): {r.text}")
-                # Fallback: if HTML entity parsing failed, retry with plain text (HTML tags stripped)
+            if r.status_code == 200:
+                print(f"[+] [TELEGRAM SENT OK] Message dispatched to Chat ID {chat_id}", flush=True)
+                return True
+            else:
+                print(f"[!] [TELEGRAM ERROR {r.status_code}] Failed for Chat ID {chat_id}: {r.text}", flush=True)
                 if "can't parse entities" in r.text and parse_mode:
                     fallback_text = re.sub(r'<[^>]+>', '', text)
                     payload_fallback = {
@@ -211,10 +250,11 @@ class TelegramBot:
                     if reply_markup:
                         payload_fallback["reply_markup"] = reply_markup
                     r_retry = self.session.post(url, json=payload_fallback, timeout=10)
+                    print(f"[+] [TELEGRAM RETRY OK] Fallback plain-text sent: {r_retry.status_code == 200}", flush=True)
                     return r_retry.status_code == 200
-            return r.status_code == 200
+            return False
         except Exception as e:
-            print(f"[!] Error sending message to {chat_id}: {e}")
+            print(f"[!] [TELEGRAM EXCEPTION] Failed sending to {chat_id}: {e}", flush=True)
             return False
 
     def answer_callback_query(self, callback_query_id: str, text: Optional[str] = None):
@@ -228,10 +268,12 @@ class TelegramBot:
         except Exception:
             pass
 
-    def broadcast(self, text: str, reply_markup: Optional[Dict[str, Any]] = None, parse_mode: str = "HTML"):
+    def broadcast(self, text: str, reply_markup: Optional[Dict[str, Any]] = None, parse_mode: str = "HTML", exclude_id: Optional[int | str] = None):
         """Broadcast message to all admin chat IDs."""
         admin_ids = self.config.get("admin_chat_ids", [])
         for cid in admin_ids:
+            if exclude_id and str(cid) == str(exclude_id):
+                continue
             self.send_message(cid, text, reply_markup=reply_markup, parse_mode=parse_mode)
 
     def is_admin(self, chat_id: int | str) -> bool:
@@ -514,10 +556,13 @@ class TelegramBot:
         elif cmd == "/proxy":
             mgr = ProxyPoolManager()
             if args and args[0].lower() in ["fetch", "refresh", "hunt"]:
-                self.send_message(chat_id, "🌐 <b>Đang kích hoạt Proxy Hunter cào và lọc Proxy mới nhất...</b>\nVui lòng chờ khoảng 15-30 giây.")
+                self.send_message(chat_id, "🌐 <b>Đang kích hoạt Proxy Hunter cào và lọc 10 Proxy live mới nhất...</b>\nVui lòng chờ khoảng 15-30 giây.", reply_markup=self.get_main_keyboard())
                 def run_hunt():
-                    fast_list = mgr.refresh_proxies()
-                    self.send_message(chat_id, f"✅ <b>Đã hoàn tất cào Proxy!</b>\n📊 Tổng cộng có <b>{len(fast_list)}</b> Proxy live tốc độ cao sẵn sàng sử dụng.")
+                    try:
+                        fast_list = mgr.refresh_proxies(target_count=10)
+                        self.send_message(chat_id, f"✅ <b>Đã cào xong {len(fast_list)} Proxy live tươi mới nhất!</b>\n📊 Kho Proxy đã được cập nhật sẵn sàng sử dụng cho Viettel.", reply_markup=self.get_main_keyboard())
+                    except Exception as e:
+                        self.send_message(chat_id, f"❌ <b>Lỗi cào Proxy:</b> {e}", reply_markup=self.get_main_keyboard())
                 threading.Thread(target=run_hunt, daemon=True).start()
             else:
                 count = mgr.get_proxy_count()
@@ -562,14 +607,15 @@ class TelegramBot:
 
         self.is_scanning = True
         try:
-            # Reset attempt counters and auto-refresh 10 live proxies before starting scan
+            # Reset attempt counters and fetch 10 fresh live proxies before starting scan
             ProxyPoolManager().reset_attempts()
             if self.config.get("auto_proxy_refresh", True):
-                print("[*] Pre-scan: Auto running Proxy Hunter to fetch 10 fresh live proxies...")
+                print("[*] Pre-scan: Auto running Proxy Hunter to fetch 10 fresh live proxies...", flush=True)
                 try:
-                    ProxyPoolManager().refresh_proxies(target_count=10, max_attempts=10)
+                    fast_list = ProxyPoolManager().refresh_proxies(target_count=10)
+                    print(f"[*] Pre-scan: Đã cào xong {len(fast_list)} proxy live.", flush=True)
                 except Exception as err:
-                    print(f"[!] Pre-scan proxy refresh notice: {err}")
+                    print(f"[!] Pre-scan proxy refresh notice: {err}", flush=True)
 
             watchlist = WatchlistManager.load()
             delay = self.config.get("delay_seconds", 1.5)
@@ -600,9 +646,10 @@ class TelegramBot:
                 if res.get("available"):
                     hits.append(res)
                     first_item = res["items"][0]
-                    print(f"  [{current_idx}/{total_count}] [+] HIT: {num} [{carrier}] - {first_item['price']}")
+                    print(f"  [{current_idx}/{total_count}] [+] HIT: {num} [{carrier}] - {first_item['price']}", flush=True)
                 else:
                     bads.append(res)
+                    print(f"  [{current_idx}/{total_count}] [-] BAD: {num} [{carrier}] - {res.get('note', 'Không có trong kho')}", flush=True)
 
             hub.check_sims_parallel(total_sims, max_workers=max_workers, progress_callback=scan_progress_cb)
 
@@ -656,8 +703,7 @@ class TelegramBot:
 
             if initiator_chat_id:
                 self.send_message(initiator_chat_id, report_msg, reply_markup=self.get_main_keyboard())
-            else:
-                self.broadcast(report_msg, reply_markup=self.get_main_keyboard())
+            self.broadcast(report_msg, reply_markup=self.get_main_keyboard(), exclude_id=initiator_chat_id)
 
             print(f"[*] Scan finished. Found {len(hits)} available SIMs.")
 
@@ -680,7 +726,7 @@ class TelegramBot:
                 if now_str in scheduled_times and now_str != self.last_checked_minute:
                     self.last_checked_minute = now_str
                     if not self.is_scanning:
-                        print(f"⏰ [Scheduler] Triggering scheduled scan for {now_str}...")
+                        print(f"⏰ [Scheduler] Triggering scheduled scan for {now_str}...", flush=True)
                         threading.Thread(target=self.run_full_scan, daemon=True).start()
 
                 # Check interval minutes
@@ -690,7 +736,7 @@ class TelegramBot:
                     if elapsed >= interval_min * 60:
                         self.last_interval_scan = time.time()
                         if not self.is_scanning:
-                            print(f"🔄 [Scheduler] Triggering interval scan (every {interval_min}m)...")
+                            print(f"🔄 [Scheduler] Triggering interval scan (every {interval_min}m)...", flush=True)
                             threading.Thread(target=self.run_full_scan, daemon=True).start()
 
             except Exception as e:

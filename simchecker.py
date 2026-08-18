@@ -22,9 +22,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Import Proxy Manager
 from proxy_hunter import ProxyPoolManager
 
-# Ensure UTF-8 output on Windows console
+import functools
+print = functools.partial(print, flush=True)
+
+# Ensure UTF-8 output on Windows console with line buffering
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    except Exception:
+        pass
 
 
 class CarrierDetector:
@@ -77,24 +83,26 @@ class ViettelApiChecker:
             self.session.proxies = {"http": proxy, "https": proxy}
 
     def _rotate_proxy(self) -> Optional[str]:
-        """Fetch next live proxy, or trigger Proxy Hunter if pool is empty."""
+        """Fetch next live proxy from pre-hunted pool when Viettel rate limits local IP."""
         new_proxy = self.proxy_pool.get_next_proxy()
-        if not new_proxy or self.proxy_pool.is_exhausted():
-            print("[!] Batch proxy hiện tại bị chặn/hết, cào đợt 10 Proxy live tiếp theo...")
+        if not new_proxy:
+            print("[!] 10 Proxy trong nhóm hiện tại đều bị chặn/hết ➔ Cào đợt 10 Proxy live tiếp theo...", flush=True)
             try:
-                self.proxy_pool.refresh_proxies(target_count=10, max_attempts=10)
+                self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=10)
                 new_proxy = self.proxy_pool.get_next_proxy()
             except RuntimeError as err:
-                print(f"[!] {err}")
+                print(f"[!] {err}", flush=True)
                 return None
 
         if new_proxy:
-            print(f"[*] Rotated to proxy: {new_proxy}")
+            print(f"[*] Viettel bị chặn IP ➔ Đổi sang Proxy live: {new_proxy}", flush=True)
             try:
                 self.session = requests.Session(impersonate="chrome131")
                 self.session.proxies = {"http": new_proxy, "https": new_proxy}
             except Exception as e:
-                print(f"[!] Error setting session proxy: {e}")
+                print(f"[!] Error setting session proxy: {e}", flush=True)
+        else:
+            print("[!] Không tìm thấy Proxy live khả dụng.", flush=True)
         return new_proxy
 
     def _query(self, search_key: str, isdn_type: str, max_retries: int = 4) -> Dict[str, Any]:

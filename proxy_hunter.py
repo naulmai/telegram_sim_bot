@@ -15,9 +15,21 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 import requests
 
-# Ensure UTF-8 output on Windows console
+import functools
+print = functools.partial(print, flush=True)
+
+# Ensure UTF-8 output on Windows console with line buffering
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    except Exception:
+        pass
+
+def set_telegram_notify_callback(callback):
+    ProxyPoolManager().set_notify_callback(callback)
+
+def notify_telegram(message: str):
+    ProxyPoolManager().trigger_notify(message)
 
 # ============================================================
 # CONFIG
@@ -52,7 +64,6 @@ MAX_WORKERS = 80
 MIN_LATENCY = 0
 MAX_LATENCY = 5000
 
-OUTPUT_ALL = "live_proxies.txt"
 OUTPUT_FAST = "fast_proxies.txt"
 
 
@@ -166,30 +177,32 @@ def check_all(proxies: List[str], target_live_count: int = 10) -> List[Dict[str,
     total = len(proxies)
     completed = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    try:
         futures = {executor.submit(check_proxy, proxy): proxy for proxy in proxies}
         for future in concurrent.futures.as_completed(futures):
             completed += 1
-            result = future.result()
-            if result:
-                live.append(result)
-                print(f"[LIVE {len(live)}/{target_live_count}] {result['proxy']:<22} {result['latency']:>7.2f} ms")
-                if len(live) >= target_live_count:
-                    print(f"\n[+] Da tim du {target_live_count} proxy live! Dung cao som de tiet kiem thoi gian.")
-                    break
+            try:
+                result = future.result()
+                if result:
+                    live.append(result)
+                    print(f"[LIVE {len(live)}/{target_live_count}] {result['proxy']:<22} {result['latency']:>7.2f} ms", flush=True)
+                    if len(live) >= target_live_count:
+                        print(f"\n[+] Da tim du {target_live_count} proxy live! Dung cao som de tiet kiem thoi gian.", flush=True)
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return live[:target_live_count]
+            except Exception:
+                pass
             if completed % 200 == 0:
-                print(f"[PROGRESS] {completed}/{total} | LIVE={len(live)}")
+                print(f"[PROGRESS] {completed}/{total} | LIVE={len(live)}", flush=True)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     return live[:target_live_count]
 
 
 def save_results(live: List[Dict[str, Any]]) -> List[str]:
     live = sorted(live, key=lambda x: x["latency"])
-
-    # Save all live proxies
-    with open(OUTPUT_ALL, "w", encoding="utf-8") as f:
-        for item in live:
-            f.write(item["proxy"] + "\n")
 
     fast_proxy_strings = [item["proxy"] for item in live]
     with open(OUTPUT_FAST, "w", encoding="utf-8") as f:
@@ -222,56 +235,87 @@ class ProxyPoolManager:
         self.current_index = 0
         self.is_hunting = False
         self.hunt_attempts = 0
+        self.notify_callback = None
         self.load_local_proxies()
 
+    def set_notify_callback(self, callback):
+        """Set Telegram notification callback directly on singleton instance."""
+        with self._lock:
+            self.notify_callback = callback
+            print("[*] Registered ProxyPoolManager notify_callback successfully.", flush=True)
+
+    def trigger_notify(self, message: str):
+        """Dispatch notification callback directly from singleton instance."""
+        print(f"[*] [NOTIFY-HUB] Triggering Telegram notification: '{message}'", flush=True)
+        cb = None
+        with self._lock:
+            cb = self.notify_callback
+        if cb:
+            try:
+                res = cb(message)
+                print(f"[+] [NOTIFY-HUB] Dispatch complete (Result: {res})", flush=True)
+                return res
+            except Exception as e:
+                print(f"[!] [NOTIFY-HUB] Exception calling callback: {e}", flush=True)
+        else:
+            print("[!] [NOTIFY-HUB] WARNING: notify_callback is None on ProxyPoolManager singleton!", flush=True)
+
     def reset_attempts(self):
-        """Reset hunt attempts counter for a fresh scan session."""
+        """Reset hunt attempts counter and hunting state for a fresh scan session."""
         with self._lock:
             self.hunt_attempts = 0
+            self.current_index = 0
+            self.is_hunting = False
 
     def load_local_proxies(self) -> List[str]:
-        """Load proxies from fast_proxies.txt or live_proxies.txt if available."""
+        """Load proxies from fast_proxies.txt if available."""
         loaded = []
-        for file in [OUTPUT_FAST, OUTPUT_ALL]:
-            if Path(file).exists():
-                try:
-                    with open(file, "r", encoding="utf-8") as f:
-                        lines = [line.strip() for line in f if line.strip()]
-                        if lines:
-                            loaded = lines
-                            break
-                except Exception:
-                    pass
+        if Path(OUTPUT_FAST).exists():
+            try:
+                with open(OUTPUT_FAST, "r", encoding="utf-8") as f:
+                    loaded = [line.strip() for line in f if line.strip()]
+            except Exception:
+                pass
 
         self.proxies = loaded
         self.current_index = 0
         return self.proxies
 
     def get_next_proxy(self) -> Optional[str]:
-        """Get the next proxy in rotation."""
+        """Get the next proxy in rotation without looping past pool bounds."""
         with self._lock:
-            if not self.proxies:
+            if not self.proxies or self.current_index >= len(self.proxies):
                 return None
-            proxy = self.proxies[self.current_index % len(self.proxies)]
+            proxy = self.proxies[self.current_index]
             self.current_index += 1
             return f"http://{proxy}" if not proxy.startswith("http") else proxy
 
-    def is_exhausted(self) -> bool:
-        """Check if current batch of proxies has been fully rotated."""
-        with self._lock:
-            if not self.proxies:
-                return True
-            return self.current_index >= len(self.proxies)
-
     def get_proxy_count(self) -> int:
         """Return total live proxies available in pool."""
-        return len(self.proxies)
+        with self._lock:
+            self.load_local_proxies()
+            return len(self.proxies)
+
+    def ensure_proxies(self, target_count: int = 10) -> List[str]:
+        """Ensure we have up to target_count proxies loaded."""
+        with self._lock:
+            if self.proxies and self.current_index < len(self.proxies):
+                return self.proxies
+        return self.fetch_next_batch(target_count=target_count)
 
     def refresh_proxies(self, target_count: int = 10, max_attempts: int = 10) -> List[str]:
-        """Run proxy hunter to collect up to 10 live proxies. Throws RuntimeError if 10 attempts fail."""
+        """Reset attempts and fetch a brand new batch of target_count live proxies."""
+        with self._lock:
+            self.hunt_attempts = 0
+            self.current_index = 0
+            self.is_hunting = False
+        return self.fetch_next_batch(target_count=target_count, max_attempts=max_attempts)
+
+    def fetch_next_batch(self, target_count: int = 10, max_attempts: int = 10) -> List[str]:
+        """Fetch next batch of 10 live proxies. Throws RuntimeError if max 10 attempts fail."""
         with self._lock:
             if self.hunt_attempts >= max_attempts:
-                raise RuntimeError(f"❌ Đã cào thử {max_attempts} đợt Proxy ({max_attempts * target_count} proxy) nhưng tất cả đều bị chặn IP!")
+                raise RuntimeError(f"❌ Đã thử {max_attempts} đợt Proxy ({max_attempts * target_count} proxy) nhưng tất cả đều bị Viettel chặn IP!")
 
             if self.is_hunting:
                 print("[*] Proxy Hunter is already running in background...")
@@ -280,7 +324,7 @@ class ProxyPoolManager:
 
         try:
             self.hunt_attempts += 1
-            print(f"\n[*] [Đợt cào {self.hunt_attempts}/{max_attempts}] Bắt đầu cào {target_count} proxy live tươi cho Viettel...")
+            print(f"\n[*] [Đợt cào {self.hunt_attempts}/{max_attempts}] 10 Proxy trước đó đều bị chặn ➔ Bắt đầu cào 10 Proxy live mới cho Viettel...")
             raw_proxies = collect_proxies()
             if raw_proxies:
                 live = check_all(raw_proxies, target_live_count=target_count)
@@ -290,7 +334,7 @@ class ProxyPoolManager:
                         self.proxies = fast_list
                         self.current_index = 0
                     return self.proxies
-            print(f"[!] Đợt cào {self.hunt_attempts} không tìm thấy đủ {target_count} proxy live.")
+            print(f"[!] Đợt cào {self.hunt_attempts} không tìm thấy proxy live mới.")
             return self.proxies
         finally:
             with self._lock:
