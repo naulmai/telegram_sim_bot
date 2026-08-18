@@ -18,6 +18,7 @@ from curl_cffi import requests
 
 # Import the core SIM checker hub
 from simchecker import SimCheckerHub, CarrierDetector
+from proxy_hunter import ProxyPoolManager
 
 # Configuration and Database Filepaths
 CONFIG_FILE = "config.json"
@@ -175,7 +176,7 @@ class TelegramBot:
             "keyboard": [
                 [{"text": "🚀 Quét Toàn Bộ SIM"}, {"text": "📋 Xem Danh Sách"}],
                 [{"text": "➕ Thêm Số Theo Dõi"}, {"text": "🗑 Xóa Số"}],
-                [{"text": "⏰ Cài Đặt Hẹn Giờ"}, {"text": "⚙️ Trạng Thái Bot"}]
+                [{"text": "⏰ Cài Đặt Hẹn Giờ"}, {"text": "🔄 Trạng Thái Proxy"}, {"text": "⚙️ Trạng Thái Bot"}]
             ],
             "resize_keyboard": True,
             "persistent": True
@@ -285,6 +286,8 @@ class TelegramBot:
                 "▫ Đặt delay: <code>/set_delay 2.0</code>"
             )
             self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
+        elif clean_text in ["🔄 Trạng Thái Proxy", "Proxy"]:
+            self.handle_command(chat_id, "/proxy", [])
         elif clean_text in ["⚙️ Trạng Thái Bot", "Trạng Thái"]:
             self.handle_command(chat_id, "/status", [])
         elif clean_text.startswith("/"):
@@ -315,6 +318,7 @@ class TelegramBot:
                 "▫ <code>/set_time &lt;HH:MM...&gt;</code> — Hẹn giờ quét tự động hàng ngày\n"
                 "▫ <code>/set_interval &lt;phút&gt;</code> — Quét định kỳ lặp lại\n"
                 "▫ <code>/set_delay &lt;giây&gt;</code> — Cài đặt delay an toàn\n"
+                "▫ <code>/proxy</code> — Xem danh sách Proxy live & Cào mới\n"
                 "▫ <code>/status</code> — Xem trạng thái hệ thống"
             )
             self.send_message(chat_id, help_text, reply_markup=self.get_main_keyboard())
@@ -507,6 +511,25 @@ class TelegramBot:
             except ValueError:
                 self.send_message(chat_id, "❌ Giá trị delay phải là số hợp lệ (ví dụ: <code>1.5</code>, <code>2.0</code>).", reply_markup=self.get_main_keyboard())
 
+        elif cmd == "/proxy":
+            mgr = ProxyPoolManager()
+            if args and args[0].lower() in ["fetch", "refresh", "hunt"]:
+                self.send_message(chat_id, "🌐 <b>Đang kích hoạt Proxy Hunter cào và lọc Proxy mới nhất...</b>\nVui lòng chờ khoảng 15-30 giây.")
+                def run_hunt():
+                    fast_list = mgr.refresh_proxies()
+                    self.send_message(chat_id, f"✅ <b>Đã hoàn tất cào Proxy!</b>\n📊 Tổng cộng có <b>{len(fast_list)}</b> Proxy live tốc độ cao sẵn sàng sử dụng.")
+                threading.Thread(target=run_hunt, daemon=True).start()
+            else:
+                count = mgr.get_proxy_count()
+                msg = (
+                    "🌐 <b>TRẠNG THÁI KHO PROXY:</b>\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 <b>Proxy live sẵn sàng:</b> <code>{count}</code> IP\n"
+                    "💡 <i>Mỗi đợt quét bot sẽ tự động cào proxy mới để chống chặn IP Viettel!</i>\n\n"
+                    "👉 <b>Gõ <code>/proxy fetch</code> để chủ động cào lại proxy ngay bây giờ.</b>"
+                )
+                self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
+
         elif cmd == "/status":
             watchlist = WatchlistManager.load()
             total_count = sum(len(nums) for nums in watchlist.values())
@@ -515,12 +538,14 @@ class TelegramBot:
             interval_str = f"Mỗi <code>{interval}</code> phút" if interval > 0 else "Đang tắt"
             delay = self.config.get("delay_seconds", 1.5)
             max_workers = self.config.get("max_workers", 4)
+            proxy_count = ProxyPoolManager().get_proxy_count()
 
             status_text = (
                 "⚙️ <b>TRẠNG THÁI HỆ THỐNG:</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Tổng số SIM theo dõi:</b> <code>{total_count}</code> SIM\n"
                 f"⚡ <b>Luồng quét song song:</b> <code>{max_workers}</code> luồng\n"
+                f"🌐 <b>Kho Proxy live:</b> <code>{proxy_count}</code> IP\n"
                 f"⏰ <b>Mốc giờ quét mỗi ngày:</b> {times}\n"
                 f"🔄 <b>Quét chu kỳ phút:</b> {interval_str}\n"
                 f"⏳ <b>Delay an toàn:</b> <code>{delay}s</code> / lượt\n"
@@ -537,6 +562,15 @@ class TelegramBot:
 
         self.is_scanning = True
         try:
+            # Reset attempt counters and auto-refresh 10 live proxies before starting scan
+            ProxyPoolManager().reset_attempts()
+            if self.config.get("auto_proxy_refresh", True):
+                print("[*] Pre-scan: Auto running Proxy Hunter to fetch 10 fresh live proxies...")
+                try:
+                    ProxyPoolManager().refresh_proxies(target_count=10, max_attempts=10)
+                except Exception as err:
+                    print(f"[!] Pre-scan proxy refresh notice: {err}")
+
             watchlist = WatchlistManager.load()
             delay = self.config.get("delay_seconds", 1.5)
             proxy = self.config.get("proxy")

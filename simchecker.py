@@ -19,6 +19,9 @@ from curl_cffi import requests
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Import Proxy Manager
+from proxy_hunter import ProxyPoolManager
+
 # Ensure UTF-8 output on Windows console
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -50,13 +53,15 @@ class CarrierDetector:
 
 
 class ViettelApiChecker:
-    """Fast backend checker for Viettel Telecom SIM inventory with configurable delay."""
+    """Fast backend checker for Viettel Telecom SIM inventory with configurable delay and auto proxy rotation."""
 
     BASE_URL = "https://apigami.viettel.vn/mvt-api/myviettel.php/omiSearchSimV2"
 
-    def __init__(self, proxy: Optional[str] = None, delay: float = 1.5):
+    def __init__(self, proxy: Optional[str] = None, delay: float = 1.5, auto_proxy_rotation: bool = True):
         self.session = requests.Session(impersonate="chrome131")
         self.delay = delay
+        self.auto_proxy_rotation = auto_proxy_rotation
+        self.proxy_pool = ProxyPoolManager()
         self.headers = {
             "accept": "application/json, text/plain, */*",
             "origin": "https://vietteltelecom.vn",
@@ -71,8 +76,29 @@ class ViettelApiChecker:
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
 
-    def _query(self, search_key: str, isdn_type: str, max_retries: int = 2) -> Dict[str, Any]:
-        """Query Viettel API for a specific isdn_type with automatic delay and retries."""
+    def _rotate_proxy(self) -> Optional[str]:
+        """Fetch next live proxy, or trigger Proxy Hunter if pool is empty."""
+        new_proxy = self.proxy_pool.get_next_proxy()
+        if not new_proxy or self.proxy_pool.is_exhausted():
+            print("[!] Batch proxy hiện tại bị chặn/hết, cào đợt 10 Proxy live tiếp theo...")
+            try:
+                self.proxy_pool.refresh_proxies(target_count=10, max_attempts=10)
+                new_proxy = self.proxy_pool.get_next_proxy()
+            except RuntimeError as err:
+                print(f"[!] {err}")
+                return None
+
+        if new_proxy:
+            print(f"[*] Rotated to proxy: {new_proxy}")
+            try:
+                self.session = requests.Session(impersonate="chrome131")
+                self.session.proxies = {"http": new_proxy, "https": new_proxy}
+            except Exception as e:
+                print(f"[!] Error setting session proxy: {e}")
+        return new_proxy
+
+    def _query(self, search_key: str, isdn_type: str, max_retries: int = 4) -> Dict[str, Any]:
+        """Query Viettel API for a specific isdn_type with automatic proxy rotation and retries."""
         for attempt in range(max_retries + 1):
             if self.delay > 0:
                 time.sleep(self.delay)
@@ -91,8 +117,8 @@ class ViettelApiChecker:
             try:
                 response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=8)
                 if response.status_code != 200:
-                    if attempt < max_retries:
-                        time.sleep(1.5)
+                    if self.auto_proxy_rotation and attempt < max_retries:
+                        self._rotate_proxy()
                         continue
                     return {"items": [], "error": f"HTTP {response.status_code}", "note": f"Lỗi kết nối HTTP {response.status_code}"}
 
@@ -100,14 +126,13 @@ class ViettelApiChecker:
                 msg = data.get("message", "")
                 err_code_tracing = data.get("errorCodeTracing", "")
 
-                if "quá nhanh" in msg or "vui lòng chờ" in msg:
-                    if attempt < max_retries:
-                        time.sleep(2.0 * (attempt + 1))
+                if "quá nhanh" in msg or "vui lòng chờ" in msg or "vượt quá hạn mức" in msg or err_code_tracing == "ERR_000505":
+                    print(f"[!] Viettel Rate Limit hit ({msg or err_code_tracing}). Rotating proxy...")
+                    if self.auto_proxy_rotation and attempt < max_retries:
+                        self._rotate_proxy()
+                        time.sleep(1.0)
                         continue
-                    return {"items": [], "rate_limited": True, "note": "Thao tác quá nhanh"}
-
-                if "vượt quá hạn mức" in msg or err_code_tracing == "ERR_000505":
-                    return {"items": [], "rate_limited": True, "note": "Bị giới hạn IP"}
+                    return {"items": [], "rate_limited": True, "note": msg or "Bị giới hạn IP"}
 
                 if data.get("errorCode") == 0:
                     return {"items": data.get("data") or [], "rate_limited": False}
@@ -115,8 +140,9 @@ class ViettelApiChecker:
                 return {"items": [], "rate_limited": False, "note": msg or "Không tìm thấy dữ liệu"}
 
             except Exception as e:
-                if attempt < max_retries:
-                    time.sleep(1.0)
+                if self.auto_proxy_rotation and attempt < max_retries:
+                    print(f"[!] Viettel network error: {e}. Rotating proxy...")
+                    self._rotate_proxy()
                     continue
                 return {"items": [], "rate_limited": False, "error": str(e), "note": f"Lỗi mạng: {e}"}
 
