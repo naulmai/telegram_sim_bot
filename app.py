@@ -8,6 +8,7 @@ Zero External Dependencies (Uses Built-in HTTP Long-Polling)
 import os
 import sys
 import re
+import html
 import json
 import time
 import datetime
@@ -33,6 +34,7 @@ class ConfigManager:
     DEFAULT_CONFIG = {
         "bot_token": "",
         "admin_chat_ids": [],
+        "proxy": "",
         "delay_seconds": 1.5,
         "scheduled_times": ["08:00", "12:00", "19:00"],
         "interval_minutes": 0,
@@ -65,6 +67,10 @@ class ConfigManager:
             admin_int = int(env_admin)
             if admin_int not in cfg.setdefault("admin_chat_ids", []):
                 cfg["admin_chat_ids"].append(admin_int)
+
+        env_proxy = os.environ.get("PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+        if env_proxy:
+            cfg["proxy"] = env_proxy.strip()
 
         return cfg
 
@@ -192,6 +198,18 @@ class TelegramBot:
             r = self.session.post(url, json=payload, timeout=10)
             if r.status_code != 200:
                 print(f"[!] Telegram Send Error ({r.status_code}): {r.text}")
+                # Fallback: if HTML entity parsing failed, retry with plain text (HTML tags stripped)
+                if "can't parse entities" in r.text and parse_mode:
+                    fallback_text = re.sub(r'<[^>]+>', '', text)
+                    payload_fallback = {
+                        "chat_id": chat_id,
+                        "text": fallback_text,
+                        "disable_web_page_preview": True
+                    }
+                    if reply_markup:
+                        payload_fallback["reply_markup"] = reply_markup
+                    r_retry = self.session.post(url, json=payload_fallback, timeout=10)
+                    return r_retry.status_code == 200
             return r.status_code == 200
         except Exception as e:
             print(f"[!] Error sending message to {chat_id}: {e}")
@@ -400,26 +418,31 @@ class TelegramBot:
             phone = args[0]
             self.send_message(chat_id, f"🔍 <b>Đang kiểm tra số:</b> <code>{phone}</code>...")
             
-            hub = SimCheckerHub(delay=self.config.get("delay_seconds", 1.5))
+            hub = SimCheckerHub(proxy=self.config.get("proxy"), delay=self.config.get("delay_seconds", 1.5))
             res = hub.check_sim(phone)
             carrier = res.get("carrier", "UNKNOWN")
 
             if res.get("available"):
                 item = res["items"][0]
+                raw_type = item.get('type', 'N/A')
+                clean_type = html.escape(re.sub(r'<[^>]+>', ' ', str(raw_type)).strip())
+                clean_price = html.escape(str(item.get('price', '')))
                 text = (
                     f"🎉 <b>KẾT QUẢ: CÒN BÁN TRÊN KHO {carrier}!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"📱 <b>Số SIM:</b> <code>{item['phone']}</code>\n"
-                    f"🏷 <b>Loại:</b> {item.get('type', 'N/A')}\n"
-                    f"💰 <b>Giá:</b> {item['price']}\n"
+                    f"🏷 <b>Loại:</b> {clean_type}\n"
+                    f"💰 <b>Giá:</b> {clean_price}\n"
                     f"━━━━━━━━━━━━━━━━━━"
                 )
             else:
+                raw_note = res.get('note', 'Đã bán hoặc chưa lên kho')
+                clean_note = html.escape(re.sub(r'<[^>]+>', ' ', str(raw_note)).strip())
                 text = (
                     f"❌ <b>KẾT QUẢ: KHÔNG CÓ TRÊN KHO {carrier}</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"📱 <b>Số SIM:</b> <code>{phone}</code>\n"
-                    f"ℹ️ <b>Ghi chú:</b> {res.get('note', 'Đã bán hoặc chưa lên kho')}\n"
+                    f"ℹ️ <b>Ghi chú:</b> {clean_note}\n"
                     f"━━━━━━━━━━━━━━━━━━"
                 )
 
@@ -508,7 +531,8 @@ class TelegramBot:
         self.is_scanning = True
         watchlist = WatchlistManager.load()
         delay = self.config.get("delay_seconds", 1.5)
-        hub = SimCheckerHub(delay=delay)
+        proxy = self.config.get("proxy")
+        hub = SimCheckerHub(proxy=proxy, delay=delay)
 
         total_sims = []
         for carrier, nums in watchlist.items():
@@ -557,8 +581,11 @@ class TelegramBot:
                     summary_lines.append(f"📱 <b>{c_key}:</b>")
                     for h in c_hits:
                         item = h["items"][0]
-                        type_str = f" ({item.get('type')})" if item.get('type') else ""
-                        summary_lines.append(f" • <code>{item['phone']}</code>: {item['price']}{type_str}")
+                        raw_type = item.get('type')
+                        clean_type = re.sub(r'<[^>]+>', ' ', str(raw_type)).strip() if raw_type else ""
+                        type_str = f" ({html.escape(clean_type)})" if clean_type else ""
+                        clean_price = html.escape(str(item.get('price', '')))
+                        summary_lines.append(f" • <code>{item['phone']}</code>: {clean_price}{type_str}")
                     summary_lines.append("")
         else:
             summary_lines.append("🎉 <b>DANH SÁCH SIM CÒN BÁN (CÓ TRONG KHO):</b>")
@@ -573,10 +600,11 @@ class TelegramBot:
                     summary_lines.append(f"📱 <b>{c_key}:</b>")
                     for b in c_bads:
                         raw_note = b.get("note") or b.get("error") or "Không có trong kho"
-                        clean_note = re.sub(r'\(.*?\)', '', raw_note).strip()
+                        clean_note = re.sub(r'<[^>]+>', ' ', str(raw_note))
+                        clean_note = re.sub(r'\(.*?\)', '', clean_note).strip()
                         if not clean_note:
                             clean_note = "Không có trong kho"
-                        summary_lines.append(f" • <code>{b['phone']}</code>: <i>{clean_note}</i>")
+                        summary_lines.append(f" • <code>{b['phone']}</code>: <i>{html.escape(clean_note)}</i>")
                     summary_lines.append("")
 
         summary_lines.append("━━━━━━━━━━━━━━━━━━")

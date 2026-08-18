@@ -69,41 +69,56 @@ class ViettelApiChecker:
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
 
-    def _query(self, search_key: str, isdn_type: str) -> Dict[str, Any]:
-        """Query Viettel API for a specific isdn_type without blocking."""
-        params = {
-            "isdn_type": isdn_type,
-            "page_type": "",
-            "page": "1",
-            "page_size": "45",
-            "key_search": search_key,
-            "total_record": "1",
-            "captcha": "",
-            "sid": uuid.uuid4().hex[:16]
-        }
+    def _query(self, search_key: str, isdn_type: str, max_retries: int = 2) -> Dict[str, Any]:
+        """Query Viettel API for a specific isdn_type with automatic delay and retries."""
+        for attempt in range(max_retries + 1):
+            if self.delay > 0:
+                time.sleep(self.delay)
 
-        try:
-            response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=8)
-            if response.status_code != 200:
-                return {"items": [], "error": f"HTTP {response.status_code}", "note": f"Lỗi kết nối HTTP {response.status_code}"}
+            params = {
+                "isdn_type": isdn_type,
+                "page_type": "",
+                "page": "1",
+                "page_size": "45",
+                "key_search": search_key,
+                "total_record": "1",
+                "captcha": "",
+                "sid": uuid.uuid4().hex[:16]
+            }
 
-            data = response.json()
-            msg = data.get("message", "")
-            err_code_tracing = data.get("errorCodeTracing", "")
-            
-            if "vượt quá hạn mức" in msg or err_code_tracing == "ERR_000505":
-                return {"items": [], "rate_limited": True, "note": "Bị giới hạn IP"}
+            try:
+                response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=8)
+                if response.status_code != 200:
+                    if attempt < max_retries:
+                        time.sleep(1.5)
+                        continue
+                    return {"items": [], "error": f"HTTP {response.status_code}", "note": f"Lỗi kết nối HTTP {response.status_code}"}
 
-            if "quá nhanh" in msg or "vui lòng chờ" in msg:
-                return {"items": [], "rate_limited": True, "note": "Thao tác quá nhanh"}
+                data = response.json()
+                msg = data.get("message", "")
+                err_code_tracing = data.get("errorCodeTracing", "")
 
-            if data.get("errorCode") == 0:
-                return {"items": data.get("data") or [], "rate_limited": False}
+                if "quá nhanh" in msg or "vui lòng chờ" in msg:
+                    if attempt < max_retries:
+                        time.sleep(2.0 * (attempt + 1))
+                        continue
+                    return {"items": [], "rate_limited": True, "note": "Thao tác quá nhanh"}
 
-            return {"items": [], "rate_limited": False, "note": msg or "Không tìm thấy dữ liệu"}
+                if "vượt quá hạn mức" in msg or err_code_tracing == "ERR_000505":
+                    return {"items": [], "rate_limited": True, "note": "Bị giới hạn IP"}
 
-        except Exception as e:
-            return {"items": [], "rate_limited": False, "error": str(e), "note": f"Lỗi mạng: {e}"}
+                if data.get("errorCode") == 0:
+                    return {"items": data.get("data") or [], "rate_limited": False}
+
+                return {"items": [], "rate_limited": False, "note": msg or "Không tìm thấy dữ liệu"}
+
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(1.0)
+                    continue
+                return {"items": [], "rate_limited": False, "error": str(e), "note": f"Lỗi mạng: {e}"}
+
+        return {"items": [], "rate_limited": True, "note": "Thao tác quá nhanh"}
 
     def search_sim(self, clean_num: str) -> Dict[str, Any]:
         """Check Viettel SIM in 2 steps: Step 1 (Prepaid) -> Step 2 (Postpaid)."""
@@ -111,8 +126,8 @@ class ViettelApiChecker:
 
         # --- 1. CHECK KHO TRẢ TRƯỚC (isdn_type=2) ---
         res_pre = self._query(clean_num, isdn_type="2")
-        if res_pre.get("rate_limited") or res_pre.get("error"):
-            rate_limit_notes.append(res_pre.get("note", ""))
+        if res_pre.get("rate_limited"):
+            rate_limit_notes.append(res_pre.get("note", "Thao tác quá nhanh"))
 
         for item in res_pre.get("items", []):
             raw_isdn = str(item.get("isdn", "")).strip()
@@ -137,12 +152,9 @@ class ViettelApiChecker:
                 }
 
         # --- 2. CHECK KHO TRẢ SAU (isdn_type=1) ---
-        if self.delay > 0:
-            time.sleep(self.delay)
-
         res_pos = self._query(clean_num, isdn_type="1")
-        if res_pos.get("rate_limited") or res_pos.get("error"):
-            rate_limit_notes.append(res_pos.get("note", ""))
+        if res_pos.get("rate_limited"):
+            rate_limit_notes.append(res_pos.get("note", "Thao tác quá nhanh"))
 
         for item in res_pos.get("items", []):
             raw_isdn = str(item.get("isdn", "")).strip()
@@ -170,8 +182,8 @@ class ViettelApiChecker:
                     }]
                 }
 
-        # If any step was blocked by Viettel IP limitation or rate limit, report it clearly
-        if rate_limit_notes:
+        # If both prepaid and postpaid were rate limited, return rate limit note
+        if len(rate_limit_notes) >= 2:
             return {"phone": clean_num, "carrier": "VIETTEL", "available": False, "note": rate_limit_notes[0]}
 
         return {"phone": clean_num, "carrier": "VIETTEL", "available": False, "note": "Không có trong kho"}
@@ -304,7 +316,9 @@ class VinaphoneApiChecker:
 
                 if clean_num == full_phone or full_phone.endswith(clean_num) or clean_num in full_phone:
                     price = item.get("price", 0)
-                    kieuso = item.get("kieuso_name", "N/A")
+                    raw_kieuso = str(item.get("kieuso_name") or "N/A")
+                    kieuso = re.sub(r'<[^>]+>', ' ', raw_kieuso).strip()
+                    kieuso = re.sub(r'\s+', ' ', kieuso)
                     
                     matched_items.append({
                         "phone": full_phone,
