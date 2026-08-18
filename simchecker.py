@@ -151,8 +151,8 @@ class ViettelApiChecker:
                     }]
                 }
 
-        # --- 2. CHECK KHO TRẢ SAU (isdn_type=1) ---
-        res_pos = self._query(clean_num, isdn_type="1")
+        # --- 2. CHECK KHO TRẢ SAU (isdn_type=22) ---
+        res_pos = self._query(clean_num, isdn_type="22")
         if res_pos.get("rate_limited"):
             rate_limit_notes.append(res_pos.get("note", "Thao tác quá nhanh"))
 
