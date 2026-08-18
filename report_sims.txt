@@ -10,14 +10,15 @@ Số SIM ĐÃ BÁN     : 11 SIM
   DANH SÁCH SIM CÒN BÁN (THEO TỪNG NHÀ MẠNG):
 -----------------------------------------------------------------
 
-[+] VIETTEL (0 SIM còn bán):
+[+] VIETTEL (2 SIM còn bán):
+    - 0981945794 | Loại: Trả sau | Giá: 60,000 VNĐ | Cam kết: 100,000 VNĐ/12T
+    - 0365141705 | Loại: Trả trước | Giá: 50,000 VNĐ
+
+[+] MOBIFONE (0 SIM còn bán):
     (Không có SIM nào còn trong kho)
 
-[+] MOBIFONE (1 SIM còn bán):
-    - 0703608734 | Loại: Trả trước | Giá: 25,000 VNĐ
-
-[+] VINAPHONE (1 SIM còn bán):
-    - 0941235423 | Loại: 10 số đầu 094 theo sở thích <br>(phong thủy, ngày tháng năm sinh) | Giá: 33,500 VNĐ
+[+] VINAPHONE (0 SIM còn bán):
+    (Không có SIM nào còn trong kho)
 
 [+] VIETNAMOBILE (1 SIM còn bán):
     - 0564441185 | Loại: SIM Số Đẹp Vietnamobile | Giá: Mua đứt: 450,000 VNĐ | Đấu nối: 50,000 VNĐ

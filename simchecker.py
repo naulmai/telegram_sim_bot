@@ -10,8 +10,10 @@ import time
 import json
 import uuid
 import argparse
+import threading
+import concurrent.futures
 import urllib3
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from curl_cffi import requests
 
 # Suppress SSL warnings
@@ -450,6 +452,58 @@ class SimCheckerHub:
                 "note": f"Đầu số {clean_num[:3]} chưa xác định nhà mạng"
             }
 
+    def check_sims_parallel(
+        self,
+        tasks: List[Dict[str, Any]],
+        max_workers: int = 4,
+        progress_callback: Optional[Callable[[Dict[str, Any], int, int], None]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Check multiple SIMs in parallel across carriers.
+        Groups tasks by carrier so each carrier's tasks are processed in a dedicated worker thread
+        sequentially with safety delays, while different carriers run simultaneously.
+        """
+        if not tasks:
+            return []
+
+        grouped_tasks: Dict[str, List[Dict[str, Any]]] = {}
+        for task in tasks:
+            num = task.get("phone", "")
+            clean_num = self.format_phone(num)
+            specified = task.get("carrier")
+            carrier = specified.upper() if specified else CarrierDetector.get_carrier(clean_num)
+            if carrier not in grouped_tasks:
+                grouped_tasks[carrier] = []
+            grouped_tasks[carrier].append({"phone": clean_num, "carrier": carrier, "original_task": task})
+
+        results: List[Dict[str, Any]] = []
+        lock = threading.Lock()
+
+        def carrier_worker(carrier_name: str, carrier_tasks: List[Dict[str, Any]]):
+            worker_results = []
+            for t in carrier_tasks:
+                res = self.check_sim(t["phone"], specified_carrier=carrier_name)
+                with lock:
+                    results.append(res)
+                    current_count = len(results)
+                    if progress_callback:
+                        try:
+                            progress_callback(res, current_count, len(tasks))
+                        except Exception:
+                            pass
+                worker_results.append(res)
+            return worker_results
+
+        num_workers = min(max_workers, max(1, len(grouped_tasks)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [
+                executor.submit(carrier_worker, c_name, c_tasks)
+                for c_name, c_tasks in grouped_tasks.items()
+            ]
+            concurrent.futures.wait(futures)
+
+        return results
+
 
 def parse_labeled_file(filepath: str) -> List[Dict[str, str]]:
     """Parse phone numbers with optional carrier labels from text file."""
@@ -480,6 +534,7 @@ def main():
     parser.add_argument("-f", "--file", help="File danh sách số điện thoại")
     parser.add_argument("-o", "--output", default="report_sims.txt", help="File lưu báo cáo (default: report_sims.txt)")
     parser.add_argument("-d", "--delay", type=float, default=1.5, help="Thời gian delay an toàn giữa các lần check (default: 1.5s)")
+    parser.add_argument("-w", "--workers", type=int, default=4, help="Số luồng chạy song song đa nhà mạng (default: 4)")
 
     args = parser.parse_args()
     hub = SimCheckerHub(delay=args.delay)
@@ -497,26 +552,26 @@ def main():
 
         print(f"[*] Tìm thấy {len(tasks)} số điện thoại trong file: {args.file}")
         print(f"[*] Cấu hình delay an toàn: {args.delay}s / lần check")
+        print(f"[*] Luồng quét song song: {args.workers} luồng (Đa nhà mạng)")
         print(f"[*] Đang tiến hành kiểm tra trên 4 nhà mạng...\n", flush=True)
 
         results_by_carrier = {"VIETTEL": [], "MOBIFONE": [], "VINAPHONE": [], "VIETNAMOBILE": [], "UNKNOWN": []}
         hits = []
         bads = []
 
-        for idx, task in enumerate(tasks, 1):
-            num = task["phone"]
-            target_carrier = task["carrier"] or args.carrier
-            res = hub.check_sim(num, specified_carrier=target_carrier)
-            carrier = res.get("carrier", target_carrier or "UNKNOWN")
+        def cli_progress_cb(res, current_count, total_count):
+            carrier = res.get("carrier", "UNKNOWN")
+            num = res.get("phone", "")
             results_by_carrier.setdefault(carrier, []).append(res)
-
             if res.get("available"):
                 hits.append(res)
                 first_item = res["items"][0]
-                print(f"  [{idx}/{len(tasks)}] \033[92m[HIT] [{carrier}] {num} -> CÒN BÁN [{first_item['type']}] ({first_item['price']})\033[0m", flush=True)
+                print(f"  [{current_count}/{total_count}] \033[92m[HIT] [{carrier}] {num} -> CÒN BÁN [{first_item['type']}] ({first_item['price']})\033[0m", flush=True)
             else:
                 bads.append(res)
-                print(f"  [{idx}/{len(tasks)}] \033[91m[BAD] [{carrier}] {num} -> {res.get('note', 'Không có trong kho')}\033[0m", flush=True)
+                print(f"  [{current_count}/{total_count}] \033[91m[BAD] [{carrier}] {num} -> {res.get('note', 'Không có trong kho')}\033[0m", flush=True)
+
+        hub.check_sims_parallel(tasks, max_workers=args.workers, progress_callback=cli_progress_cb)
 
         # Build full report
         report_lines = []

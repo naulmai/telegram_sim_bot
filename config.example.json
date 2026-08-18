@@ -2,6 +2,7 @@
   "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
   "admin_chat_ids": [],
   "delay_seconds": 1.5,
+  "max_workers": 4,
   "scheduled_times": [
     "08:00",
     "12:00",

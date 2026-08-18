@@ -36,6 +36,7 @@ class ConfigManager:
         "admin_chat_ids": [],
         "proxy": "",
         "delay_seconds": 1.5,
+        "max_workers": 4,
         "scheduled_times": ["08:00", "12:00", "19:00"],
         "interval_minutes": 0,
         "auto_scan_enabled": True
@@ -513,11 +514,13 @@ class TelegramBot:
             interval = self.config.get("interval_minutes", 0)
             interval_str = f"Mỗi <code>{interval}</code> phút" if interval > 0 else "Đang tắt"
             delay = self.config.get("delay_seconds", 1.5)
+            max_workers = self.config.get("max_workers", 4)
 
             status_text = (
                 "⚙️ <b>TRẠNG THÁI HỆ THỐNG:</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Tổng số SIM theo dõi:</b> <code>{total_count}</code> SIM\n"
+                f"⚡ <b>Luồng quét song song:</b> <code>{max_workers}</code> luồng\n"
                 f"⏰ <b>Mốc giờ quét mỗi ngày:</b> {times}\n"
                 f"🔄 <b>Quét chu kỳ phút:</b> {interval_str}\n"
                 f"⏳ <b>Delay an toàn:</b> <code>{delay}s</code> / lượt\n"
@@ -554,19 +557,20 @@ class TelegramBot:
             hits = []
             bads = []
 
-            print(f"[*] Starting scan of {len(total_sims)} SIMs at {datetime.datetime.now().strftime('%H:%M:%S')}...")
+            max_workers = self.config.get("max_workers", 4)
+            print(f"[*] Starting parallel scan of {len(total_sims)} SIMs ({max_workers} workers) at {datetime.datetime.now().strftime('%H:%M:%S')}...")
 
-            for idx, item in enumerate(total_sims, 1):
-                num = item["phone"]
-                carrier = item["carrier"]
-                res = hub.check_sim(num, specified_carrier=carrier)
-
+            def scan_progress_cb(res, current_idx, total_count):
+                carrier = res.get("carrier", "UNKNOWN")
+                num = res.get("phone", "")
                 if res.get("available"):
                     hits.append(res)
                     first_item = res["items"][0]
-                    print(f"  [+] HIT: {num} [{carrier}] - {first_item['price']}")
+                    print(f"  [{current_idx}/{total_count}] [+] HIT: {num} [{carrier}] - {first_item['price']}")
                 else:
                     bads.append(res)
+
+            hub.check_sims_parallel(total_sims, max_workers=max_workers, progress_callback=scan_progress_cb)
 
             # Summary Header
             summary_lines = [
