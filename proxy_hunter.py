@@ -4,6 +4,7 @@ Collects public proxies from multiple GitHub repositories, filters live proxies 
 and manages dynamic proxy rotation for SIM Checker Bot.
 """
 
+import sys
 import re
 import time
 import json
@@ -13,6 +14,10 @@ import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 import requests
+
+# Ensure UTF-8 output on Windows console
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # ============================================================
 # CONFIG
@@ -170,7 +175,7 @@ def check_all(proxies: List[str], target_live_count: int = 10) -> List[Dict[str,
                 live.append(result)
                 print(f"[LIVE {len(live)}/{target_live_count}] {result['proxy']:<22} {result['latency']:>7.2f} ms")
                 if len(live) >= target_live_count:
-                    print(f"\n[✔] Đã tìm đủ {target_live_count} proxy live! Dừng cào sớm để tiết kiệm thời gian.")
+                    print(f"\n[+] Da tim du {target_live_count} proxy live! Dung cao som de tiet kiem thoi gian.")
                     break
             if completed % 200 == 0:
                 print(f"[PROGRESS] {completed}/{total} | LIVE={len(live)}")
