@@ -3,3 +3,5 @@ config.json
 *.pyc
 __pycache__/
 .env
+fast_proxies.txt
+
