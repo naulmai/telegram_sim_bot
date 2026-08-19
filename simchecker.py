@@ -394,10 +394,7 @@ class VietnamobileApiChecker:
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
 
-    def search_sim(self, clean_num: str) -> Dict[str, Any]:
-        if self.delay > 0:
-            time.sleep(self.delay)
-
+    def search_sim(self, clean_num: str, max_retries: int = 2) -> Dict[str, Any]:
         data = {
             "patten": clean_num,
             "page": "1",
@@ -407,46 +404,53 @@ class VietnamobileApiChecker:
             "numClass": ""
         }
 
-        try:
-            self.session.get(self.BASE_URL, headers=self.headers, timeout=8, verify=False)
-            response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=8, verify=False)
-            
-            if response.status_code != 200:
-                return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "error": f"HTTP {response.status_code}"}
+        last_error = None
+        for attempt in range(max_retries):
+            if self.delay > 0 and attempt > 0:
+                time.sleep(self.delay)
 
-            html_text = response.text
-            matched_items = []
-
-            row_blocks = html_text.split('<tr class="')
-            for block in row_blocks[1:]:
-                phone_match = re.search(r'phone=["\'](\d+)["\']', block)
-                if not phone_match:
-                    phone_match = re.search(r'<span>(\d{10})</span>', block)
+            try:
+                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=12, verify=False)
                 
-                if phone_match:
-                    found_phone = phone_match.group(1)
-                    if clean_num == found_phone or found_phone.endswith(clean_num) or clean_num in found_phone:
-                        buyout_m = re.search(r'attrbuyoutprice=["\'](\d+)["\']', block)
-                        buyout_price = f"{int(buyout_m.group(1)):,} VNĐ" if buyout_m else "N/A"
-                        
-                        fee_m = re.search(r'attrprice=["\'](\d+)["\']', block)
-                        fee_price = f"{int(fee_m.group(1)):,} VNĐ" if fee_m else "50,000 VNĐ"
+                if response.status_code != 200:
+                    last_error = f"HTTP {response.status_code}"
+                    continue
 
-                        matched_items.append({
-                            "phone": found_phone,
-                            "type": "SIM Số Đẹp Vietnamobile",
-                            "price": f"Mua đứt: {buyout_price} | Đấu nối: {fee_price}",
-                            "buyout": buyout_price,
-                            "fee": fee_price
-                        })
+                html_text = response.text
+                matched_items = []
 
-            if matched_items:
-                return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": True, "count": len(matched_items), "items": matched_items}
-            else:
-                return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
+                row_blocks = html_text.split('<tr class="')
+                for block in row_blocks[1:]:
+                    phone_match = re.search(r'phone=["\'](\d+)["\']', block)
+                    if not phone_match:
+                        phone_match = re.search(r'<span>(\d{10})</span>', block)
+                    
+                    if phone_match:
+                        found_phone = phone_match.group(1)
+                        if clean_num == found_phone or found_phone.endswith(clean_num) or clean_num in found_phone:
+                            buyout_m = re.search(r'attrbuyoutprice=["\'](\d+)["\']', block)
+                            buyout_price = f"{int(buyout_m.group(1)):,} VNĐ" if buyout_m else "N/A"
+                            
+                            fee_m = re.search(r'attrprice=["\'](\d+)["\']', block)
+                            fee_price = f"{int(fee_m.group(1)):,} VNĐ" if fee_m else "50,000 VNĐ"
 
-        except Exception as e:
-            return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": None, "error": str(e)}
+                            matched_items.append({
+                                "phone": found_phone,
+                                "type": "SIM Số Đẹp Vietnamobile",
+                                "price": f"Mua đứt: {buyout_price} | Đấu nối: {fee_price}",
+                                "buyout": buyout_price,
+                                "fee": fee_price
+                            })
+
+                if matched_items:
+                    return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": True, "count": len(matched_items), "items": matched_items}
+                else:
+                    return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
+
+            except Exception as e:
+                last_error = str(e)
+
+        return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": None, "error": last_error or "Lỗi kết nối Vietnamobile"}
 
 
 class SimCheckerHub:
