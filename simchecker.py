@@ -105,7 +105,7 @@ class ViettelApiChecker:
             print("[!] Không tìm thấy Proxy live khả dụng.", flush=True)
         return new_proxy
 
-    def _query(self, search_key: str, isdn_type: str, max_retries: int = 4) -> Dict[str, Any]:
+    def _query(self, search_key: str, isdn_type: str, max_retries: int = 6) -> Dict[str, Any]:
         """Query Viettel API for a specific isdn_type with automatic proxy rotation and retries."""
         for attempt in range(max_retries + 1):
             if self.delay > 0:
@@ -123,7 +123,7 @@ class ViettelApiChecker:
             }
 
             try:
-                response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=8)
+                response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=10)
                 if response.status_code != 200:
                     if self.auto_proxy_rotation and attempt < max_retries:
                         self._rotate_proxy()
@@ -148,11 +148,27 @@ class ViettelApiChecker:
                 return {"items": [], "rate_limited": False, "note": msg or "Không tìm thấy dữ liệu"}
 
             except Exception as e:
+                err_str = str(e)
                 if self.auto_proxy_rotation and attempt < max_retries:
-                    print(f"[!] Viettel network error: {e}. Rotating proxy...")
+                    print(f"[!] Viettel network error ({err_str}). Rotating proxy...", flush=True)
                     self._rotate_proxy()
+                    time.sleep(0.5)
                     continue
-                return {"items": [], "rate_limited": False, "error": str(e), "note": f"Lỗi mạng: {e}"}
+
+                # Final fallback attempt: Try direct IP connection without proxy if proxy failed
+                if getattr(self.session, "proxies", None):
+                    print(f"[!] Viettel proxy error ({err_str}). Attempting direct IP fallback...", flush=True)
+                    try:
+                        direct_session = requests.Session(impersonate="chrome131")
+                        resp = direct_session.post(self.BASE_URL, params=params, headers=self.headers, timeout=10)
+                        if resp.status_code == 200:
+                            d = resp.json()
+                            if d.get("errorCode") == 0:
+                                return {"items": d.get("data") or [], "rate_limited": False}
+                    except Exception:
+                        pass
+
+                return {"items": [], "rate_limited": False, "error": err_str, "note": f"Lỗi mạng: {err_str}"}
 
         return {"items": [], "rate_limited": True, "note": "Thao tác quá nhanh"}
 
