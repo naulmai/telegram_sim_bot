@@ -46,7 +46,14 @@ class ConfigManager:
         "max_workers": 4,
         "scheduled_times": ["08:00", "12:00", "19:00"],
         "interval_minutes": 0,
-        "auto_scan_enabled": True
+        "auto_scan_enabled": True,
+        "probe_numbers": {
+            "VIETTEL_PREPAID": "",
+            "VIETTEL_POSTPAID": "",
+            "MOBIFONE": "",
+            "VINAPHONE": "",
+            "VIETNAMOBILE": ""
+        }
     }
 
     @classmethod
@@ -183,7 +190,8 @@ class TelegramBot:
             "keyboard": [
                 [{"text": "🚀 Quét Toàn Bộ SIM"}, {"text": "📋 Xem Danh Sách"}],
                 [{"text": "➕ Thêm Số Theo Dõi"}, {"text": "🗑 Xóa Số"}],
-                [{"text": "⏰ Cài Đặt Hẹn Giờ"}, {"text": "🔄 Trạng Thái Proxy"}, {"text": "⚙️ Trạng Thái Bot"}]
+                [{"text": "🔬 Health Check"}, {"text": "🔄 Trạng Thái Proxy"}, {"text": "⚙️ Trạng Thái Bot"}],
+                [{"text": "⏰ Cài Đặt Hẹn Giờ"}]
             ],
             "resize_keyboard": True,
             "persistent": True
@@ -293,6 +301,8 @@ class TelegramBot:
             self.handle_command(chat_id, "/scan", [])
         elif clean_text in ["📋 Xem Danh Sách", "Danh Sách"]:
             self.handle_command(chat_id, "/list", [])
+        elif clean_text in ["🔬 Health Check", "Health Check"]:
+            self.handle_command(chat_id, "/probe", ["test"])
         elif clean_text in ["➕ Thêm Số Theo Dõi", "➕ Hướng Dẫn Thêm Số", "Thêm Số"]:
             msg = (
                 "➕ <b>CÁCH THÊM SỐ VÀO DANH SÁCH THEO DÕI:</b>\n"
@@ -575,6 +585,80 @@ class TelegramBot:
                 )
                 self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
 
+        elif cmd == "/probe":
+            probe_numbers = self.config.setdefault("probe_numbers", {
+                "VIETTEL_PREPAID": "", "VIETTEL_POSTPAID": "",
+                "MOBIFONE": "", "VINAPHONE": "", "VIETNAMOBILE": ""
+            })
+            PROBE_LABELS = {
+                "VIETTEL_PREPAID":  "Viettel Trả Trước",
+                "VIETTEL_POSTPAID": "Viettel Trả Sau",
+                "MOBIFONE":         "MobiFone",
+                "VINAPHONE":        "VinaPhone",
+                "VIETNAMOBILE":     "Vietnamobile",
+            }
+            KEY_MAP = {
+                "viettel_prepaid":  "VIETTEL_PREPAID",
+                "viettel_postpaid": "VIETTEL_POSTPAID",
+                "mobifone":         "MOBIFONE",
+                "vinaphone":        "VINAPHONE",
+                "vietnamobile":     "VIETNAMOBILE",
+            }
+
+            if not args:
+                # Show current probe numbers and usage
+                lines = ["🔬 <b>CẤU HÌNH SỐ PROBE HEALTH CHECK:</b>", "━━━━━━━━━━━━━━━━━━"]
+                for key, label in PROBE_LABELS.items():
+                    num = probe_numbers.get(key, "")
+                    val = f"<code>{num}</code>" if num else "<i>(chưa cài)</i>"
+                    lines.append(f"▫ <b>{label}:</b> {val}")
+                lines += [
+                    "",
+                    "👉 <b>Cách cài số probe:</b>",
+                    "▫ <code>/probe viettel_prepaid 0981xxxxxx</code>",
+                    "▫ <code>/probe viettel_postpaid 0365xxxxxx</code>",
+                    "▫ <code>/probe mobifone 0703xxxxxx</code>",
+                    "▫ <code>/probe vinaphone 0812xxxxxx</code>",
+                    "▫ <code>/probe vietnamobile 0564xxxxxx</code>",
+                    "▫ <code>/probe test</code> — Chạy Health Check thử ngay",
+                ]
+                self.send_message(chat_id, "\n".join(lines), reply_markup=self.get_main_keyboard())
+
+            elif args[0].lower() == "test":
+                self.send_message(chat_id, "🔬 <b>Đang chạy Health Check...</b>\nVui lòng chờ vài giây.")
+                def _run_hc():
+                    self.run_health_check(initiator_chat_id=chat_id)
+                threading.Thread(target=_run_hc, daemon=True).start()
+
+            else:
+                config_key = KEY_MAP.get(args[0].lower())
+                if not config_key:
+                    self.send_message(chat_id,
+                        f"❌ Carrier không hợp lệ. Dùng: <code>{', '.join(KEY_MAP.keys())}</code>",
+                        reply_markup=self.get_main_keyboard())
+                    return
+                if len(args) < 2:
+                    self.send_message(chat_id,
+                        f"⚠️ <b>Cú pháp:</b> <code>/probe {args[0]} 0xxxxxxxxx</code>",
+                        reply_markup=self.get_main_keyboard())
+                    return
+                num = re.sub(r'\D', '', args[1])
+                if num.startswith("84") and len(num) == 11:
+                    num = "0" + num[2:]
+                elif not num.startswith("0") and len(num) == 9:
+                    num = "0" + num
+                if len(num) != 10:
+                    self.send_message(chat_id, "❌ Số điện thoại không hợp lệ (cần 10 chữ số).",
+                        reply_markup=self.get_main_keyboard())
+                    return
+                probe_numbers[config_key] = num
+                self.config["probe_numbers"] = probe_numbers
+                ConfigManager.save(self.config)
+                label = PROBE_LABELS.get(config_key, config_key)
+                self.send_message(chat_id,
+                    f"✅ <b>Đã cập nhật số probe {label}:</b> <code>{num}</code>",
+                    reply_markup=self.get_main_keyboard())
+
         elif cmd == "/status":
             watchlist = WatchlistManager.load()
             total_count = sum(len(nums) for nums in watchlist.values())
@@ -584,6 +668,8 @@ class TelegramBot:
             delay = self.config.get("delay_seconds", 1.5)
             max_workers = self.config.get("max_workers", 4)
             proxy_count = ProxyPoolManager().get_proxy_count()
+            probe_numbers = self.config.get("probe_numbers", {})
+            active_probes = sum(1 for v in probe_numbers.values() if v and v.strip())
 
             status_text = (
                 "⚙️ <b>TRẠNG THÁI HỆ THỐNG:</b>\n"
@@ -591,6 +677,7 @@ class TelegramBot:
                 f"📊 <b>Tổng số SIM theo dõi:</b> <code>{total_count}</code> SIM\n"
                 f"⚡ <b>Luồng quét song song:</b> <code>{max_workers}</code> luồng\n"
                 f"🌐 <b>Kho Proxy live:</b> <code>{proxy_count}</code> IP\n"
+                f"🔬 <b>Số probe Health Check:</b> <code>{active_probes}/5</code> đã cài\n"
                 f"⏰ <b>Mốc giờ quét mỗi ngày:</b> {times}\n"
                 f"🔄 <b>Quét chu kỳ phút:</b> {interval_str}\n"
                 f"⏳ <b>Delay an toàn:</b> <code>{delay}s</code> / lượt\n"
@@ -598,6 +685,72 @@ class TelegramBot:
                 f"━━━━━━━━━━━━━━━━━━"
             )
             self.send_message(chat_id, status_text, reply_markup=self.get_main_keyboard())
+
+    def run_health_check(self, initiator_chat_id: Optional[int | str] = None) -> Dict[str, bool]:
+        """
+        Run health checks against configured probe numbers for all carriers.
+        Sends a formatted Telegram report of results.
+        Returns: dict of probe_key -> passed (True/False).
+        """
+        probe_numbers = self.config.get("probe_numbers", {})
+        active_probes = {k: v.strip() for k, v in probe_numbers.items() if v and v.strip()}
+
+        if not active_probes:
+            print("[*] Health Check: Chưa cài số probe nào, bỏ qua.", flush=True)
+            if initiator_chat_id:
+                msg = (
+                    "⚠️ <b>CHƯA CẤU HÌNH SỐ PROBE HEALTH CHECK!</b>\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "Hiện chưa có số probe nào được cài đặt.\n\n"
+                    "👉 <b>Hướng dẫn cài đặt số probe:</b>\n"
+                    "▫ <code>/probe viettel_prepaid 0981xxxxxx</code>\n"
+                    "▫ <code>/probe viettel_postpaid 0365xxxxxx</code>\n"
+                    "▫ <code>/probe mobifone 0703xxxxxx</code>\n"
+                    "▫ <code>/probe vinaphone 0812xxxxxx</code>\n"
+                    "▫ <code>/probe vietnamobile 0564xxxxxx</code>"
+                )
+                self.send_message(initiator_chat_id, msg, reply_markup=self.get_main_keyboard())
+            return {}
+
+        print(f"[*] Health Check: Đang kiểm tra {len(active_probes)} probe số...", flush=True)
+
+        hub = SimCheckerHub(proxy=self.config.get("proxy"), delay=0.5)
+        hc_results = hub.health_check(active_probes)
+
+        CARRIER_LABELS = {
+            "VIETTEL_PREPAID":  "Viettel Trả Trước",
+            "VIETTEL_POSTPAID": "Viettel Trả Sau",
+            "MOBIFONE":         "MobiFone",
+            "VINAPHONE":        "VinaPhone",
+            "VIETNAMOBILE":     "Vietnamobile",
+        }
+
+        all_passed = all(r["passed"] for r in hc_results.values())
+        any_failed = any(not r["passed"] for r in hc_results.values())
+
+        lines = ["🔬 <b>HEALTH CHECK — TRẠNG THÁI API NHÀ MẠNG:</b>", "━━━━━━━━━━━━━━━━━━"]
+        for key, res in hc_results.items():
+            label = CARRIER_LABELS.get(key, key)
+            icon = "✅" if res["passed"] else "❌"
+            status_text = "READY" if res["passed"] else "NOT READY"
+            # Terminal log vẫn giữ chi tiết để debug
+            print(f"  [{icon}] {label} ({res['probe']}): {'PASS' if res['passed'] else 'FAIL — ' + res['note']}", flush=True)
+            lines.append(f"{icon} <b>{label}:</b> {status_text}")
+
+        lines.append("")
+        if all_passed:
+            lines.append("🚀 <i>Tất cả API sẵn sàng — Bắt đầu quét SIM...</i>")
+        elif any_failed:
+            lines.append("⚠️ <i>Một số API chưa sẵn sàng — Sẽ bỏ qua carrier đó khi quét.</i>")
+
+        msg = "\n".join(lines)
+        if initiator_chat_id:
+            self.send_message(initiator_chat_id, msg, reply_markup=self.get_main_keyboard())
+            self.broadcast(msg, exclude_id=initiator_chat_id)
+        else:
+            self.broadcast(msg)
+
+        return {k: v["passed"] for k, v in hc_results.items()}
 
     def run_full_scan(self, initiator_chat_id: Optional[int | str] = None):
         """Execute full scan and send carrier-grouped summary report."""
@@ -617,6 +770,28 @@ class TelegramBot:
                 except Exception as err:
                     print(f"[!] Pre-scan proxy refresh notice: {err}", flush=True)
 
+            # Health check: verify each carrier API is functional before scanning
+            health_results = self.run_health_check(initiator_chat_id=initiator_chat_id)
+
+            # Determine which carriers to skip based on failed health checks
+            skip_carriers: set = set()
+            active_probes = {k: v.strip() for k, v in self.config.get("probe_numbers", {}).items() if v and v.strip()}
+            if active_probes:
+                for carrier in ["MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
+                    if carrier in active_probes and not health_results.get(carrier, True):
+                        skip_carriers.add(carrier)
+                # Viettel: skip only if ALL configured Viettel probes fail
+                has_pre  = "VIETTEL_PREPAID"  in active_probes
+                has_post = "VIETTEL_POSTPAID" in active_probes
+                if has_pre or has_post:
+                    pre_ok  = health_results.get("VIETTEL_PREPAID",  not has_pre)
+                    post_ok = health_results.get("VIETTEL_POSTPAID", not has_post)
+                    if not pre_ok and not post_ok:
+                        skip_carriers.add("VIETTEL")
+
+            if skip_carriers:
+                print(f"[!] Health Check FAIL — Bỏ qua carrier: {skip_carriers}", flush=True)
+
             watchlist = WatchlistManager.load()
             delay = self.config.get("delay_seconds", 1.5)
             proxy = self.config.get("proxy")
@@ -624,6 +799,9 @@ class TelegramBot:
 
             total_sims = []
             for carrier, nums in watchlist.items():
+                if carrier in skip_carriers:
+                    print(f"[!] Bỏ qua {carrier} do Health Check FAIL.", flush=True)
+                    continue
                 for num in nums:
                     total_sims.append({"phone": num, "carrier": carrier})
 

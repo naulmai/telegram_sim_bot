@@ -538,6 +538,74 @@ class SimCheckerHub:
 
         return results
 
+    def health_check(self, probe_numbers: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Run health checks using known-active probe numbers for each carrier.
+        probe_numbers keys: VIETTEL_PREPAID, VIETTEL_POSTPAID, MOBIFONE, VINAPHONE, VIETNAMOBILE
+        Returns: dict of key -> {passed: bool, note: str, probe: str}
+        A probe is PASS only if the API responds AND the expected number is found in results.
+        """
+        results: Dict[str, Dict[str, Any]] = {}
+
+        def _run_probe(key: str, check_fn: Callable[[str], tuple]) -> None:
+            """Execute a single probe check and record result."""
+            raw = probe_numbers.get(key, "").strip()
+            if not raw:
+                return
+            clean = re.sub(r'\D', '', raw)
+            if clean.startswith("84") and len(clean) == 11:
+                clean = "0" + clean[2:]
+            elif not clean.startswith("0") and len(clean) == 9:
+                clean = "0" + clean
+            try:
+                passed, note = check_fn(clean)
+                results[key] = {"passed": passed, "note": note, "probe": raw}
+            except Exception as exc:
+                results[key] = {"passed": False, "note": f"Exception: {exc}", "probe": raw}
+
+        def _check_viettel_prepaid(clean: str) -> tuple:
+            """Check Viettel prepaid (isdn_type=2) probe."""
+            res = self.viettel_checker._query(clean, isdn_type="2")
+            if res.get("error"):
+                return False, f"Lỗi API: {res['error']}"
+            for item in res.get("items", []):
+                raw_isdn = str(item.get("isdn", "")).strip()
+                full = ("0" + raw_isdn) if not raw_isdn.startswith("0") else raw_isdn
+                if clean == full or full.endswith(clean[1:]):
+                    return True, "OK"
+            return False, "Số probe không tìm thấy trong kho Trả Trước Viettel"
+
+        def _check_viettel_postpaid(clean: str) -> tuple:
+            """Check Viettel postpaid (isdn_type=22) probe."""
+            res = self.viettel_checker._query(clean, isdn_type="22")
+            if res.get("error"):
+                return False, f"Lỗi API: {res['error']}"
+            for item in res.get("items", []):
+                raw_isdn = str(item.get("isdn", "")).strip()
+                full = ("0" + raw_isdn) if not raw_isdn.startswith("0") else raw_isdn
+                if clean == full or full.endswith(clean[1:]):
+                    return True, "OK"
+            return False, "Số probe không tìm thấy trong kho Trả Sau Viettel"
+
+        def _make_generic_checker(search_fn: Callable) -> Callable:
+            """Wrap a carrier search_sim function for health check use."""
+            def _fn(clean: str) -> tuple:
+                res = search_fn(clean)
+                if res.get("available") is True:
+                    return True, "OK"
+                if res.get("error"):
+                    return False, f"Lỗi API: {res['error']}"
+                return False, res.get("note", "Số probe không tìm thấy")
+            return _fn
+
+        _run_probe("VIETTEL_PREPAID",  _check_viettel_prepaid)
+        _run_probe("VIETTEL_POSTPAID", _check_viettel_postpaid)
+        _run_probe("MOBIFONE",         _make_generic_checker(self.mobifone_checker.search_sim))
+        _run_probe("VINAPHONE",        _make_generic_checker(self.vinaphone_checker.search_sim))
+        _run_probe("VIETNAMOBILE",     _make_generic_checker(self.vietnamobile_checker.search_sim))
+
+        return results
+
 
 def parse_labeled_file(filepath: str) -> List[Dict[str, str]]:
     """Parse phone numbers with optional carrier labels from text file."""

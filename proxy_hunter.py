@@ -36,22 +36,90 @@ def notify_telegram(message: str):
 # ============================================================
 
 PROXY_SOURCES = [
-    # TheSpeedX
+    # =========================
+    # ProxyScrape - ~5 minutes
+    # =========================
+    "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/protocols/http/data.txt",
+    "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/protocols/https/data.txt",
+    "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/protocols/socks4/data.txt",
+    "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+    "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/all/data.txt",
+
+    # =========================
+    # Proxifly - ~5 minutes
+    # =========================
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.txt",
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt",
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+
+    # =========================
+    # prxchk - ~10 minutes
+    # =========================
+    "https://raw.githubusercontent.com/prxchk/proxy-list/main/all.txt",
+    "https://raw.githubusercontent.com/prxchk/proxy-list/main/http.txt",
+    "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks4.txt",
+    "https://raw.githubusercontent.com/prxchk/proxy-list/main/socks5.txt",
+
+    # =========================
+    # gproxynet - ~30 minutes
+    # =========================
+    "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/all.txt",
+    "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/http.txt",
+    "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/socks4.txt",
+    "https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/socks5.txt",
+
+    # =========================
+    # iplocate - ~30 minutes
+    # =========================
+    "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/http.txt",
+    "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/https.txt",
+    "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/socks4.txt",
+    "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/socks5.txt",
+
+    # =========================
+    # hproxy - continuously scanned
+    # =========================
+    "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/all.txt",
+    "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/http.txt",
+    "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/https.txt",
+    "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/socks4.txt",
+    "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/socks5.txt",
+
+    # =========================
+    # dinoz0rg - frequent updates
+    # =========================
+    "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt",
+    "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt",
+    "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks5.txt",
+
+    # =========================
+    # clarketm - daily
+    # =========================
+    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+
+    # =========================
+    # TheSpeedX - frequent/daily
+    # =========================
     "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
     "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
     "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
 
+    # =========================
     # Monosans
+    # =========================
     "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
     "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
     "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
     "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt",
 
-    # Proxifly
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/https/data.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+    # =========================
+    # roosterkid
+    # =========================
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTP_RAW.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS4_RAW.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
 ]
 
 TEST_URL = "https://vietteltelecom.vn/vx/di-dong/sim-so/#"
