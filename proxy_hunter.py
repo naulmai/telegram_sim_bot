@@ -87,90 +87,7 @@ PROXY_SOURCES = [
 ]
 
 TEST_URL = "https://vietteltelecom.vn/vx/di-dong/sim-so/#"
-
-FETCH_TIMEOUT = 15
-PROXY_TIMEOUT = 5
-
-MAX_WORKERS = 80
-
-MIN_LATENCY = 0
-MAX_LATENCY = 5000
-
-OUTPUT_FAST = "fast_proxies.txt"
-
-
-PROXY_REGEX = re.compile(
-    r"(?<!\d)"
-    r"(?:\d{1,3}\.){3}\d{1,3}"
-    r":\d{1,5}"
-    r"(?!\d)"
-)
-
-
-def valid_ip(ip: str) -> bool:
-    try:
-        parts = ip.split(".")
-        if len(parts) != 4:
-            return False
-        return all(0 <= int(x) <= 255 for x in parts)
-    except ValueError:
-        return False
-
-
-def extract_proxies(text: str) -> Set[str]:
-    result = set()
-    for match in PROXY_REGEX.findall(text):
-        try:
-            ip, port = match.split(":")
-            if not valid_ip(ip):
-                continue
-            port_num = int(port)
-            if not 1 <= port_num <= 65535:
-                continue
-            result.add(f"{ip}:{port_num}")
-        except Exception:
-            continue
-    return result
-
-
-def fetch_source(url: str) -> Set[str]:
-    try:
-        response = requests.get(
-            url,
-            timeout=FETCH_TIMEOUT,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/131.0.0.0 Safari/537.36"
-                )
-            },
-        )
-        response.raise_for_status()
-        proxies = extract_proxies(response.text)
-        print(f"[SOURCE] {len(proxies):>6} proxies | {url}")
-        return proxies
-    except Exception as e:
-        print(f"[SOURCE ERROR] {url} -> {e}")
-        return set()
-
-
-def collect_proxies() -> List[str]:
-    print("\n" + "=" * 70)
-    print("COLLECTING PUBLIC PROXIES")
-    print("=" * 70)
-
-    all_proxies = set()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(fetch_source, url) for url in PROXY_SOURCES]
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                all_proxies.update(future.result())
-            except Exception:
-                pass
-
-    print(f"\n[+] UNIQUE PROXIES COLLECTED: {len(all_proxies)}")
-    return list(all_proxies)
+VNMB_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
 
 
 def check_proxy(proxy: str) -> Optional[Dict[str, Any]]:
@@ -180,22 +97,40 @@ def check_proxy(proxy: str) -> Optional[Dict[str, Any]]:
         "https": proxy_url,
     }
     start = time.perf_counter()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
+    }
     try:
+        # Test connection against Viettel or Vietnamobile site
         response = requests.get(
+            VNMB_URL,
+            proxies=proxies,
+            timeout=PROXY_TIMEOUT,
+            headers=headers,
+            verify=False
+        )
+        latency = (time.perf_counter() - start) * 1000
+        if response.status_code == 200 and ("vietnamobile" in response.text.lower() or "<table" in response.text.lower()):
+            if latency <= MAX_LATENCY:
+                return {"proxy": proxy, "latency": round(latency, 2)}
+        
+        # Fallback test against Viettel site
+        response_vtl = requests.get(
             TEST_URL,
             proxies=proxies,
             timeout=PROXY_TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0"},
+            headers=headers,
+            verify=False
         )
-        latency = (time.perf_counter() - start) * 1000
-        if response.status_code != 200:
-            return None
-        if latency > MAX_LATENCY:
-            return None
-        return {
-            "proxy": proxy,
-            "latency": round(latency, 2),
-        }
+        latency_vtl = (time.perf_counter() - start) * 1000
+        if response_vtl.status_code == 200 and latency_vtl <= MAX_LATENCY:
+            return {"proxy": proxy, "latency": round(latency_vtl, 2)}
+
+        return None
     except Exception:
         return None
 
