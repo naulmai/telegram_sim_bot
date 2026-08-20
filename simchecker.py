@@ -13,6 +13,8 @@ import argparse
 import threading
 import concurrent.futures
 import urllib3
+import urllib.request
+import urllib.parse
 from typing import Dict, Any, List, Optional, Callable
 from curl_cffi import requests
 
@@ -389,13 +391,13 @@ class VinaphoneApiChecker:
 
 
 class VietnamobileApiChecker:
-    """Fast backend checker for Vietnamobile SIM inventory with configurable delay."""
+    """Fast backend checker for Vietnamobile SIM inventory with configurable delay and urllib fallback for ARM/Linux compatibility."""
 
     BASE_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
         # NOTE: Vietnamobile does NOT require proxy — site is public and not IP-blocked.
-        # Using a proxy here causes timeouts. Session always uses direct connection.
+        # Session uses direct connection.
         self.session = requests.Session(impersonate="chrome131")
         self.delay = delay
         self.headers = {
@@ -409,9 +411,39 @@ class VietnamobileApiChecker:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
         }
-        # Intentionally NOT setting proxy here
 
-    def search_sim(self, clean_num: str, max_retries: int = 3) -> Dict[str, Any]:
+    def _parse_html_response(self, html_text: str, clean_num: str) -> Dict[str, Any]:
+        """Parse raw HTML response from Vietnamobile so-dep search."""
+        matched_items = []
+        row_blocks = html_text.split('<tr class="')
+        for block in row_blocks[1:]:
+            phone_match = re.search(r'phone=["\'](\d+)["\']', block)
+            if not phone_match:
+                phone_match = re.search(r'<span>(\d{10})</span>', block)
+
+            if phone_match:
+                found_phone = phone_match.group(1)
+                if clean_num == found_phone or found_phone.endswith(clean_num) or clean_num in found_phone:
+                    buyout_m = re.search(r'attrbuyoutprice=["\'](\d+)["\']', block)
+                    buyout_price = f"{int(buyout_m.group(1)):,} VNĐ" if buyout_m else "N/A"
+
+                    fee_m = re.search(r'attrprice=["\'](\d+)["\']', block)
+                    fee_price = f"{int(fee_m.group(1)):,} VNĐ" if fee_m else "50,000 VNĐ"
+
+                    matched_items.append({
+                        "phone": found_phone,
+                        "type": "SIM Số Đẹp Vietnamobile",
+                        "price": f"Mua đứt: {buyout_price} | Đấu nối: {fee_price}",
+                        "buyout": buyout_price,
+                        "fee": fee_price
+                    })
+
+        if matched_items:
+            return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": True, "count": len(matched_items), "items": matched_items}
+        else:
+            return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
+
+    def search_sim(self, clean_num: str, max_retries: int = 2) -> Dict[str, Any]:
         data = {
             "patten": clean_num,
             "page": "1",
@@ -426,48 +458,27 @@ class VietnamobileApiChecker:
             if self.delay > 0 and attempt > 0:
                 time.sleep(self.delay)
 
+            # Try 1: Fast curl_cffi session
             try:
-                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=10, verify=False)
-
-                if response.status_code != 200:
-                    last_error = f"HTTP {response.status_code}"
-                    continue
-
-                # Use content + decode to avoid Windows charmap encoding error
-                html_text = response.content.decode("utf-8", errors="ignore")
-                matched_items = []
-
-                row_blocks = html_text.split('<tr class="')
-                for block in row_blocks[1:]:
-                    phone_match = re.search(r'phone=["\'](\d+)["\']', block)
-                    if not phone_match:
-                        phone_match = re.search(r'<span>(\d{10})</span>', block)
-
-                    if phone_match:
-                        found_phone = phone_match.group(1)
-                        if clean_num == found_phone or found_phone.endswith(clean_num) or clean_num in found_phone:
-                            buyout_m = re.search(r'attrbuyoutprice=["\'](\d+)["\']', block)
-                            buyout_price = f"{int(buyout_m.group(1)):,} VNĐ" if buyout_m else "N/A"
-
-                            fee_m = re.search(r'attrprice=["\'](\d+)["\']', block)
-                            fee_price = f"{int(fee_m.group(1)):,} VNĐ" if fee_m else "50,000 VNĐ"
-
-                            matched_items.append({
-                                "phone": found_phone,
-                                "type": "SIM Số Đẹp Vietnamobile",
-                                "price": f"Mua đứt: {buyout_price} | Đấu nối: {fee_price}",
-                                "buyout": buyout_price,
-                                "fee": fee_price
-                            })
-
-                if matched_items:
-                    return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": True, "count": len(matched_items), "items": matched_items}
-                else:
-                    return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
-
+                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=6, verify=False)
+                if response.status_code == 200:
+                    html_text = response.content.decode("utf-8", errors="ignore")
+                    return self._parse_html_response(html_text, clean_num)
+                last_error = f"HTTP {response.status_code}"
             except Exception as e:
                 last_error = str(e)
-                print(f"[!] Vietnamobile attempt {attempt + 1}/{max_retries} failed: {last_error}", flush=True)
+
+            # Try 2: Standard urllib fallback (bypasses curl_cffi TLS impersonation issues on ARM/Linux)
+            try:
+                encoded_data = urllib.parse.urlencode(data).encode("utf-8")
+                req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    if resp.status == 200:
+                        html_text = resp.read().decode("utf-8", errors="ignore")
+                        return self._parse_html_response(html_text, clean_num)
+            except Exception as urllib_err:
+                last_error = str(urllib_err)
+                print(f"[!] Vietnamobile urllib fallback attempt {attempt + 1}/{max_retries} failed: {last_error}", flush=True)
 
         return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": None, "error": last_error or "Lỗi kết nối Vietnamobile"}
 
