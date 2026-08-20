@@ -416,6 +416,10 @@ class VietnamobileApiChecker:
 
     def _parse_html_response(self, html_text: str, clean_num: str) -> Dict[str, Any]:
         """Parse raw HTML response from Vietnamobile so-dep search."""
+        # Detect proxy injected fake pages, Captchas, or Cloudflare challenges returning HTTP 200
+        if "vietnamobile" not in html_text.lower() and "<table" not in html_text.lower():
+            raise ValueError("Proxy trả về trang giả mạo / CAPTCHA (không phải Vietnamobile)")
+
         matched_items = []
         row_blocks = html_text.split('<tr class="')
         for block in row_blocks[1:]:
