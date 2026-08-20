@@ -190,7 +190,8 @@ class TelegramBot:
             "keyboard": [
                 [{"text": "🚀 Quét Toàn Bộ SIM"}, {"text": "📋 Xem Danh Sách"}],
                 [{"text": "➕ Thêm Số Theo Dõi"}, {"text": "🗑 Xóa Số"}],
-                [{"text": "🔬 Health Check"}, {"text": "🔄 Trạng Thái Proxy"}, {"text": "⚙️ Trạng Thái Bot"}],
+                [{"text": "🔬 Xem Probe"}, {"text": "▶️ Chạy Health Check"}],
+                [{"text": "🔄 Trạng Thái Proxy"}, {"text": "⚙️ Trạng Thái Bot"}],
                 [{"text": "⏰ Cài Đặt Hẹn Giờ"}]
             ],
             "resize_keyboard": True,
@@ -301,7 +302,9 @@ class TelegramBot:
             self.handle_command(chat_id, "/scan", [])
         elif clean_text in ["📋 Xem Danh Sách", "Danh Sách"]:
             self.handle_command(chat_id, "/list", [])
-        elif clean_text in ["🔬 Health Check", "Health Check"]:
+        elif clean_text in ["🔬 Xem Probe", "Xem Probe"]:
+            self.handle_command(chat_id, "/probe", [])
+        elif clean_text in ["▶️ Chạy Health Check", "Chạy Health Check", "🔬 Health Check", "Health Check"]:
             self.handle_command(chat_id, "/probe", ["test"])
         elif clean_text in ["➕ Thêm Số Theo Dõi", "➕ Hướng Dẫn Thêm Số", "Thêm Số"]:
             msg = (
