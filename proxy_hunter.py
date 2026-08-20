@@ -214,9 +214,9 @@ def check_proxy(proxy: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def check_all(proxies: List[str], target_live_count: int = 10) -> List[Dict[str, Any]]:
+def check_all(proxies: List[str], target_live_count: int = 10, target_name: str = "Nhà mạng") -> List[Dict[str, Any]]:
     print("\n" + "=" * 70)
-    print(f"CHECKING LIVE PROXIES FOR VIETTEL TELECOM (TARGET: {target_live_count} LIVE)")
+    print(f"CHECKING LIVE PROXIES FOR {target_name.upper()} (TARGET: {target_live_count} LIVE)")
     print("=" * 70)
 
     live = []
@@ -234,7 +234,7 @@ def check_all(proxies: List[str], target_live_count: int = 10) -> List[Dict[str,
                     live.append(result)
                     print(f"[LIVE {len(live)}/{target_live_count}] {result['proxy']:<22} {result['latency']:>7.2f} ms", flush=True)
                     if len(live) >= target_live_count:
-                        print(f"\n[+] Da tim du {target_live_count} proxy live! Dung cao som de tiet kiem thoi gian.", flush=True)
+                        print(f"\n[+] Da tim du {target_live_count} proxy live cho {target_name}! Dung cao som de tiet kiem thoi gian.", flush=True)
                         executor.shutdown(wait=False, cancel_futures=True)
                         return live[:target_live_count]
             except Exception:
@@ -342,45 +342,45 @@ class ProxyPoolManager:
             self.load_local_proxies()
             return len(self.proxies)
 
-    def ensure_proxies(self, target_count: int = 10) -> List[str]:
+    def ensure_proxies(self, target_count: int = 10, target_name: str = "Nhà mạng") -> List[str]:
         """Ensure we have up to target_count proxies loaded."""
         with self._lock:
             if self.proxies and self.current_index < len(self.proxies):
                 return self.proxies
-        return self.fetch_next_batch(target_count=target_count)
+        return self.fetch_next_batch(target_count=target_count, target_name=target_name)
 
-    def refresh_proxies(self, target_count: int = 10, max_attempts: int = 10) -> List[str]:
+    def refresh_proxies(self, target_count: int = 10, max_attempts: int = 10, target_name: str = "Nhà mạng") -> List[str]:
         """Reset attempts and fetch a brand new batch of target_count live proxies."""
         with self._lock:
             self.hunt_attempts = 0
             self.current_index = 0
             self.is_hunting = False
-        return self.fetch_next_batch(target_count=target_count, max_attempts=max_attempts)
+        return self.fetch_next_batch(target_count=target_count, max_attempts=max_attempts, target_name=target_name)
 
-    def fetch_next_batch(self, target_count: int = 10, max_attempts: int = 10) -> List[str]:
+    def fetch_next_batch(self, target_count: int = 10, max_attempts: int = 10, target_name: str = "Nhà mạng") -> List[str]:
         """Fetch next batch of 10 live proxies. Throws RuntimeError if max 10 attempts fail."""
         with self._lock:
             if self.hunt_attempts >= max_attempts:
-                raise RuntimeError(f"❌ Đã thử {max_attempts} đợt Proxy ({max_attempts * target_count} proxy) nhưng tất cả đều bị Viettel chặn IP!")
+                raise RuntimeError(f"❌ Đã thử {max_attempts} đợt Proxy ({max_attempts * target_count} proxy) nhưng tất cả đều bị {target_name} chặn IP!")
 
             if self.is_hunting:
-                print("[*] Proxy Hunter is already running in background...")
+                print(f"[*] Proxy Hunter cho {target_name} đang chạy ngầm...", flush=True)
                 return self.proxies
             self.is_hunting = True
 
         try:
             self.hunt_attempts += 1
-            print(f"\n[*] [Đợt cào {self.hunt_attempts}/{max_attempts}] 10 Proxy trước đó đều bị chặn ➔ Bắt đầu cào 10 Proxy live mới cho Viettel...")
+            print(f"\n[*] [Đợt cào {self.hunt_attempts}/{max_attempts}] Bắt đầu cào 10 Proxy live mới cho nhà mạng {target_name}...", flush=True)
             raw_proxies = collect_proxies()
             if raw_proxies:
-                live = check_all(raw_proxies, target_live_count=target_count)
+                live = check_all(raw_proxies, target_live_count=target_count, target_name=target_name)
                 if live:
                     fast_list = save_results(live)
                     with self._lock:
                         self.proxies = fast_list
                         self.current_index = 0
                     return self.proxies
-            print(f"[!] Đợt cào {self.hunt_attempts} không tìm thấy proxy live mới.")
+            print(f"[!] Đợt cào {self.hunt_attempts} không tìm thấy proxy live mới cho {target_name}.", flush=True)
             return self.proxies
         finally:
             with self._lock:

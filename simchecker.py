@@ -88,9 +88,9 @@ class ViettelApiChecker:
         """Fetch next live proxy from pre-hunted pool when Viettel rate limits local IP."""
         new_proxy = self.proxy_pool.get_next_proxy()
         if not new_proxy:
-            print("[!] 10 Proxy trong nhóm hiện tại đều bị chặn/hết ➔ Cào đợt 10 Proxy live tiếp theo...", flush=True)
+            print("[!] 10 Proxy trong nhóm hiện tại đều bị chặn/hết ➔ Cào đợt 10 Proxy live tiếp theo cho Viettel...", flush=True)
             try:
-                self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=10)
+                self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=10, target_name="Viettel")
                 new_proxy = self.proxy_pool.get_next_proxy()
             except RuntimeError as err:
                 print(f"[!] {err}", flush=True)
@@ -490,9 +490,9 @@ class VietnamobileApiChecker:
         for attempt in range(max_retries):
             px = self.proxy_pool.get_next_proxy()
             if not px:
-                print("[!] Proxy pool empty for Vietnamobile. Fetching new batch...", flush=True)
+                print("[!] Proxy pool empty for Vietnamobile. Fetching new batch for Vietnamobile...", flush=True)
                 try:
-                    self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=5)
+                    self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=5, target_name="Vietnamobile")
                     px = self.proxy_pool.get_next_proxy()
                 except RuntimeError as err:
                     print(f"[!] {err}", flush=True)
@@ -684,7 +684,7 @@ class SimCheckerHub:
             """Check Vietnamobile probe after refreshing 10 fresh live proxies."""
             try:
                 print("[*] Health Check Vietnamobile: Tiến hành quét mới 10 Proxy live cho Vietnamobile...", flush=True)
-                self.vietnamobile_checker.proxy_pool.refresh_proxies(target_count=10, max_attempts=5)
+                self.vietnamobile_checker.proxy_pool.refresh_proxies(target_count=10, max_attempts=5, target_name="Vietnamobile")
             except Exception as exc:
                 print(f"[!] Lỗi quét mới Proxy cho Vietnamobile Health Check: {exc}", flush=True)
 
