@@ -411,7 +411,7 @@ class VietnamobileApiChecker:
         }
         # Intentionally NOT setting proxy here
 
-    def search_sim(self, clean_num: str, max_retries: int = 2) -> Dict[str, Any]:
+    def search_sim(self, clean_num: str, max_retries: int = 3) -> Dict[str, Any]:
         data = {
             "patten": clean_num,
             "page": "1",
@@ -427,13 +427,14 @@ class VietnamobileApiChecker:
                 time.sleep(self.delay)
 
             try:
-                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=12, verify=False)
-                
+                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=10, verify=False)
+
                 if response.status_code != 200:
                     last_error = f"HTTP {response.status_code}"
                     continue
 
-                html_text = response.text
+                # Use content + decode to avoid Windows charmap encoding error
+                html_text = response.content.decode("utf-8", errors="ignore")
                 matched_items = []
 
                 row_blocks = html_text.split('<tr class="')
@@ -441,13 +442,13 @@ class VietnamobileApiChecker:
                     phone_match = re.search(r'phone=["\'](\d+)["\']', block)
                     if not phone_match:
                         phone_match = re.search(r'<span>(\d{10})</span>', block)
-                    
+
                     if phone_match:
                         found_phone = phone_match.group(1)
                         if clean_num == found_phone or found_phone.endswith(clean_num) or clean_num in found_phone:
                             buyout_m = re.search(r'attrbuyoutprice=["\'](\d+)["\']', block)
                             buyout_price = f"{int(buyout_m.group(1)):,} VNĐ" if buyout_m else "N/A"
-                            
+
                             fee_m = re.search(r'attrprice=["\'](\d+)["\']', block)
                             fee_price = f"{int(fee_m.group(1)):,} VNĐ" if fee_m else "50,000 VNĐ"
 
@@ -466,8 +467,10 @@ class VietnamobileApiChecker:
 
             except Exception as e:
                 last_error = str(e)
+                print(f"[!] Vietnamobile attempt {attempt + 1}/{max_retries} failed: {last_error}", flush=True)
 
         return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": None, "error": last_error or "Lỗi kết nối Vietnamobile"}
+
 
 
 class SimCheckerHub:
