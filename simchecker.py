@@ -486,11 +486,22 @@ class VietnamobileApiChecker:
         for attempt in range(max_retries):
             px = self.proxy_pool.get_next_proxy()
             if not px:
+                print("[!] Proxy pool empty for Vietnamobile. Fetching new batch...", flush=True)
+                try:
+                    self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=5)
+                    px = self.proxy_pool.get_next_proxy()
+                except RuntimeError as err:
+                    print(f"[!] {err}", flush=True)
+                    break
+            
+            if not px:
                 break
+
+            print(f"[*] Vietnamobile attempt {attempt+1}/{max_retries} with proxy: {px}", flush=True)
             try:
                 s = requests.Session(impersonate="chrome131")
                 s.proxies = {"http": px, "https": px}
-                resp = s.post(self.BASE_URL, data=data, headers=self.headers, timeout=8, verify=False)
+                resp = s.post(self.BASE_URL, data=data, headers=self.headers, timeout=10, verify=False)
                 if resp.status_code == 200:
                     html_text = resp.content.decode("utf-8", errors="ignore")
                     return self._parse_html_response(html_text, clean_num)
