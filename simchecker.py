@@ -445,7 +445,7 @@ class VietnamobileApiChecker:
         else:
             return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
 
-    def search_sim(self, clean_num: str, max_retries: int = 3) -> Dict[str, Any]:
+    def search_sim(self, clean_num: str, max_retries: int = 6) -> Dict[str, Any]:
         data = {
             "patten": clean_num,
             "page": "1",
@@ -456,6 +456,7 @@ class VietnamobileApiChecker:
         }
 
         last_error = None
+        encoded_data = urllib.parse.urlencode(data).encode("utf-8")
 
         # Step 1: Direct attempt via curl_cffi (no proxy)
         try:
@@ -472,7 +473,6 @@ class VietnamobileApiChecker:
             import ssl
             ctx = ssl._create_unverified_context()
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx))
-            encoded_data = urllib.parse.urlencode(data).encode("utf-8")
             req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
             with opener.open(req, timeout=6) as resp:
                 if resp.status == 200:
@@ -501,12 +501,27 @@ class VietnamobileApiChecker:
             try:
                 s = requests.Session(impersonate="chrome131")
                 s.proxies = {"http": px, "https": px}
-                resp = s.post(self.BASE_URL, data=data, headers=self.headers, timeout=10, verify=False)
+                resp = s.post(self.BASE_URL, data=data, headers=self.headers, timeout=15, verify=False)
                 if resp.status_code == 200:
                     html_text = resp.content.decode("utf-8", errors="ignore")
                     return self._parse_html_response(html_text, clean_num)
             except Exception as px_err:
                 last_error = str(px_err)
+                # Fallback to urllib with proxy if curl_cffi times out via proxy
+                print(f"[*] Vietnamobile curl_cffi proxy failed ({px_err}), trying urllib proxy...", flush=True)
+                try:
+                    ctx = ssl._create_unverified_context()
+                    opener = urllib.request.build_opener(
+                        urllib.request.ProxyHandler({"http": px, "https": px}),
+                        urllib.request.HTTPSHandler(context=ctx)
+                    )
+                    req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
+                    with opener.open(req, timeout=15) as resp_url:
+                        if resp_url.status == 200:
+                            html_text = resp_url.read().decode("utf-8", errors="ignore")
+                            return self._parse_html_response(html_text, clean_num)
+                except Exception as px_url_err:
+                    last_error = f"{px_err} | {px_url_err}"
 
         return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": None, "error": last_error or "Lỗi kết nối Vietnamobile"}
 
