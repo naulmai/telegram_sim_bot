@@ -717,6 +717,16 @@ class TelegramBot:
 
         print(f"[*] Health Check: Đang kiểm tra {len(active_probes)} probe số...", flush=True)
 
+        # When triggered manually via Telegram, refresh proxy pool first for fresh proxies
+        if initiator_chat_id and self.config.get("auto_proxy_refresh", True):
+            print("[*] Health Check: Cào proxy mới trước khi kiểm tra...", flush=True)
+            try:
+                ProxyPoolManager().reset_attempts()
+                ProxyPoolManager().refresh_proxies(target_count=10)
+                print("[*] Health Check: Proxy sẵn sàng.", flush=True)
+            except Exception as proxy_err:
+                print(f"[!] Health Check proxy refresh notice: {proxy_err}", flush=True)
+
         hub = SimCheckerHub(proxy=self.config.get("proxy"), delay=0.5)
         hc_results = hub.health_check(active_probes)
 

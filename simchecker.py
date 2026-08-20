@@ -394,6 +394,8 @@ class VietnamobileApiChecker:
     BASE_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
+        # NOTE: Vietnamobile does NOT require proxy — site is public and not IP-blocked.
+        # Using a proxy here causes timeouts. Session always uses direct connection.
         self.session = requests.Session(impersonate="chrome131")
         self.delay = delay
         self.headers = {
@@ -407,8 +409,7 @@ class VietnamobileApiChecker:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
         }
-        if proxy:
-            self.session.proxies = {"http": proxy, "https": proxy}
+        # Intentionally NOT setting proxy here
 
     def search_sim(self, clean_num: str, max_retries: int = 2) -> Dict[str, Any]:
         data = {
