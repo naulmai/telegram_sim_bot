@@ -6,6 +6,7 @@ Direct Fast Backend APIs (Runs 100% in Background)
 
 import sys
 import re
+import ssl
 import time
 import json
 import uuid
@@ -22,7 +23,7 @@ from curl_cffi import requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Import Proxy Manager
-from proxy_hunter import ProxyPoolManager
+from proxy_hunter import ProxyPoolManager, VietnamobileProxyPoolManager
 
 import functools
 print = functools.partial(print, flush=True)
@@ -125,7 +126,7 @@ class ViettelApiChecker:
             }
 
             try:
-                response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=10)
+                response = self.session.post(self.BASE_URL, params=params, headers=self.headers, timeout=10, verify=False)
                 if response.status_code != 200:
                     if self.auto_proxy_rotation and attempt < max_retries:
                         self._rotate_proxy()
@@ -397,11 +398,13 @@ class VietnamobileApiChecker:
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
         # NOTE: Vietnamobile does NOT use config.proxy by default — direct connection is fastest & reliable.
-        # Direct session intentionally ignores static proxy parameter to avoid dead proxies.
+        # Uses a SEPARATE VietnamobileProxyPoolManager (independent from Viettel's ProxyPoolManager)
+        # to prevent race conditions when both checkers run concurrently in parallel threads.
         self.session = requests.Session(impersonate="chrome131")
         self.session.proxies = {}
         self.delay = delay
-        self.proxy_pool = ProxyPoolManager()
+        self.proxy_pool = VietnamobileProxyPoolManager()  # Separate pool — no shared index with Viettel
+        self.ssl_ctx = ssl._create_unverified_context()   # Reuse ssl context
         self.headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "content-type": "application/x-www-form-urlencoded",
@@ -474,9 +477,10 @@ class VietnamobileApiChecker:
 
         # Step 2: Direct urllib fallback (bypasses curl_cffi and environment proxies completely)
         try:
-            import ssl
-            ctx = ssl._create_unverified_context()
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx))
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=self.ssl_ctx)
+            )
             req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
             with opener.open(req, timeout=6) as resp:
                 if resp.status == 200:
@@ -514,10 +518,9 @@ class VietnamobileApiChecker:
                 # Fallback to urllib with proxy if curl_cffi times out via proxy
                 print(f"[*] Vietnamobile curl_cffi proxy failed ({px_err}), trying urllib proxy...", flush=True)
                 try:
-                    ctx = ssl._create_unverified_context()
                     opener = urllib.request.build_opener(
                         urllib.request.ProxyHandler({"http": px, "https": px}),
-                        urllib.request.HTTPSHandler(context=ctx)
+                        urllib.request.HTTPSHandler(context=self.ssl_ctx)
                     )
                     req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
                     with opener.open(req, timeout=15) as resp_url:
@@ -628,22 +631,7 @@ class SimCheckerHub:
         A probe is PASS only if the API responds AND the expected number is found in results.
         """
         results: Dict[str, Dict[str, Any]] = {}
-
-        def _run_probe(key: str, check_fn: Callable[[str], tuple]) -> None:
-            """Execute a single probe check and record result."""
-            raw = probe_numbers.get(key, "").strip()
-            if not raw:
-                return
-            clean = re.sub(r'\D', '', raw)
-            if clean.startswith("84") and len(clean) == 11:
-                clean = "0" + clean[2:]
-            elif not clean.startswith("0") and len(clean) == 9:
-                clean = "0" + clean
-            try:
-                passed, note = check_fn(clean)
-                results[key] = {"passed": passed, "note": note, "probe": raw}
-            except Exception as exc:
-                results[key] = {"passed": False, "note": f"Exception: {exc}", "probe": raw}
+        lock = threading.Lock()
 
         def _check_viettel_prepaid(clean: str) -> tuple:
             """Check Viettel prepaid (isdn_type=2) probe."""
@@ -681,13 +669,10 @@ class SimCheckerHub:
             return _fn
 
         def _check_vietnamobile_probe(clean: str) -> tuple:
-            """Check Vietnamobile probe after refreshing 10 fresh live proxies."""
-            try:
-                print("[*] Health Check Vietnamobile: Tiến hành quét mới 10 Proxy live cho Vietnamobile...", flush=True)
-                self.vietnamobile_checker.proxy_pool.refresh_proxies(target_count=10, max_attempts=5, target_name="Vietnamobile")
-            except Exception as exc:
-                print(f"[!] Lỗi quét mới Proxy cho Vietnamobile Health Check: {exc}", flush=True)
-
+            """Check Vietnamobile probe using the pre-loaded VNMB proxy pool.
+            Proxy refresh is done by the CALLER (app.py run_health_check / run_full_scan)
+            before calling hub.health_check() — no double-scrape needed here.
+            """
             res = self.vietnamobile_checker.search_sim(clean)
             if res.get("available") is True:
                 return True, "OK"
@@ -695,11 +680,35 @@ class SimCheckerHub:
                 return False, f"Lỗi API: {res['error']}"
             return False, res.get("note", "Số probe không tìm thấy")
 
-        _run_probe("VIETTEL_PREPAID",  _check_viettel_prepaid)
-        _run_probe("VIETTEL_POSTPAID", _check_viettel_postpaid)
-        _run_probe("MOBIFONE",         _make_generic_checker(self.mobifone_checker.search_sim))
-        _run_probe("VINAPHONE",        _make_generic_checker(self.vinaphone_checker.search_sim))
-        _run_probe("VIETNAMOBILE",     _check_vietnamobile_probe)
+        def _worker(key: str, check_fn: Callable[[str], tuple]) -> None:
+            """Worker to run a single probe concurrently in its own thread."""
+            raw = probe_numbers.get(key, "").strip()
+            if not raw:
+                return
+            clean = re.sub(r'\D', '', raw)
+            if clean.startswith("84") and len(clean) == 11:
+                clean = "0" + clean[2:]
+            elif not clean.startswith("0") and len(clean) == 9:
+                clean = "0" + clean
+            try:
+                passed, note = check_fn(clean)
+                with lock:
+                    results[key] = {"passed": passed, "note": note, "probe": raw}
+            except Exception as exc:
+                with lock:
+                    results[key] = {"passed": False, "note": f"Exception: {exc}", "probe": raw}
+
+        probe_tasks = [
+            ("VIETTEL_PREPAID",  _check_viettel_prepaid),
+            ("VIETTEL_POSTPAID", _check_viettel_postpaid),
+            ("MOBIFONE",         _make_generic_checker(self.mobifone_checker.search_sim)),
+            ("VINAPHONE",        _make_generic_checker(self.vinaphone_checker.search_sim)),
+            ("VIETNAMOBILE",     _check_vietnamobile_probe),
+        ]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_worker, key, fn) for key, fn in probe_tasks]
+            concurrent.futures.wait(futures)
 
         return results
 

@@ -18,7 +18,7 @@ from curl_cffi import requests
 
 # Import the core SIM checker hub
 from simchecker import SimCheckerHub, CarrierDetector
-from proxy_hunter import ProxyPoolManager, set_telegram_notify_callback
+from proxy_hunter import ProxyPoolManager, VietnamobileProxyPoolManager, set_telegram_notify_callback
 
 # Configuration and Database Filepaths
 CONFIG_FILE = "config.json"
@@ -47,6 +47,7 @@ class ConfigManager:
         "scheduled_times": ["08:00", "12:00", "19:00"],
         "interval_minutes": 0,
         "auto_scan_enabled": True,
+        "auto_proxy_refresh": True,       # Auto-refresh proxy pool before each scan/health-check
         "probe_numbers": {
             "VIETTEL_PREPAID": "",
             "VIETTEL_POSTPAID": "",
@@ -368,11 +369,12 @@ class TelegramBot:
                 "▫ <code>/scan</code> — Quét toàn bộ danh sách theo dõi ngay\n"
                 "▫ <code>/list</code> — Xem danh sách các số đang theo dõi\n"
                 "▫ <code>/check &lt;số&gt;</code> — Kiểm tra ngay 1 số bất kỳ\n"
-                "▫ <code>/add &lt;mạng&gt; &lt;số&gt;</code> — Thêm số vào theo dõi\n"
+                "▫ <code>/add &lt;số_1&gt; &lt;số_2&gt;...</code> — Thêm số (Tự động nhận diện nhà mạng)\n"
                 "▫ <code>/del &lt;số&gt;</code> — Xóa số khỏi theo dõi\n"
                 "▫ <code>/set_time &lt;HH:MM...&gt;</code> — Hẹn giờ quét tự động hàng ngày\n"
                 "▫ <code>/set_interval &lt;phút&gt;</code> — Quét định kỳ lặp lại\n"
                 "▫ <code>/set_delay &lt;giây&gt;</code> — Cài đặt delay an toàn\n"
+                "▫ <code>/probe</code> — Cấu hình & test số Probe Health Check\n"
                 "▫ <code>/proxy</code> — Xem danh sách Proxy live & Cào mới\n"
                 "▫ <code>/status</code> — Xem trạng thái hệ thống"
             )
@@ -397,7 +399,15 @@ class TelegramBot:
 
         elif cmd == "/add":
             if not args:
-                self.send_message(chat_id, "⚠️ <b>Cú pháp:</b> <code>/add &lt;nhà_mạng&gt; &lt;số_1&gt; &lt;số_2&gt;...</code>\n<b>Ví dụ:</b> <code>/add viettel 0981945794 0365141705</code>", reply_markup=self.get_main_keyboard())
+                msg = (
+                    "⚠️ <b>Cú pháp thêm số theo dõi:</b>\n"
+                    "━━━━━━━━━━━━━━━━━━\n"
+                    "👉 <b>Cách 1: Tự động nhận diện nhà mạng (Khuyên dùng):</b>\n"
+                    "  <code>/add 0981945794 0703141705 0564141705</code>\n\n"
+                    "👉 <b>Cách 2: Gõ kèm tên nhà mạng:</b>\n"
+                    "  <code>/add viettel 0981945794 0365141705</code>"
+                )
+                self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
                 return
 
             carrier = None
@@ -567,24 +577,44 @@ class TelegramBot:
                 self.send_message(chat_id, "❌ Giá trị delay phải là số hợp lệ (ví dụ: <code>1.5</code>, <code>2.0</code>).", reply_markup=self.get_main_keyboard())
 
         elif cmd == "/proxy":
-            mgr = ProxyPoolManager()
+            vtl_mgr = ProxyPoolManager()
+            vnmb_mgr = VietnamobileProxyPoolManager()
             if args and args[0].lower() in ["fetch", "refresh", "hunt"]:
-                self.send_message(chat_id, "🌐 <b>Đang kích hoạt Proxy Hunter cào và lọc 10 Proxy live mới nhất...</b>\nVui lòng chờ khoảng 15-30 giây.", reply_markup=self.get_main_keyboard())
+                self.send_message(chat_id, "🌐 <b>Đang kích hoạt Proxy Hunter cào và lọc 10 Proxy live mới cho Viettel & Vietnamobile...</b>\nVui lòng chờ khoảng 15-30 giây.", reply_markup=self.get_main_keyboard())
                 def run_hunt():
                     try:
-                        fast_list = mgr.refresh_proxies(target_count=10)
-                        self.send_message(chat_id, f"✅ <b>Đã cào xong {len(fast_list)} Proxy live tươi mới nhất!</b>\n📊 Kho Proxy đã được cập nhật sẵn sàng sử dụng cho Viettel.", reply_markup=self.get_main_keyboard())
+                        vtl_list = []
+                        vnmb_list = []
+                        def _h_vtl():
+                            nonlocal vtl_list
+                            vtl_list = vtl_mgr.refresh_proxies(target_count=10, target_name="Viettel")
+                        def _h_vnmb():
+                            nonlocal vnmb_list
+                            vnmb_list = vnmb_mgr.refresh_proxies(target_count=10, max_attempts=5)
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+                            ex.submit(_h_vtl)
+                            ex.submit(_h_vnmb)
+                        self.send_message(
+                            chat_id,
+                            f"✅ <b>Đã cào xong Proxy live mới nhất!</b>\n"
+                            f"▫ <b>Viettel:</b> {len(vtl_list)} IP\n"
+                            f"▫ <b>Vietnamobile:</b> {len(vnmb_list)} IP\n\n"
+                            f"📊 Kho Proxy đã sẵn sàng sử dụng.",
+                            reply_markup=self.get_main_keyboard()
+                        )
                     except Exception as e:
                         self.send_message(chat_id, f"❌ <b>Lỗi cào Proxy:</b> {e}", reply_markup=self.get_main_keyboard())
                 threading.Thread(target=run_hunt, daemon=True).start()
             else:
-                count = mgr.get_proxy_count()
+                vtl_count = vtl_mgr.get_proxy_count()
+                vnmb_count = vnmb_mgr.get_proxy_count()
                 msg = (
                     "🌐 <b>TRẠNG THÁI KHO PROXY:</b>\n"
                     "━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 <b>Proxy live sẵn sàng:</b> <code>{count}</code> IP\n"
-                    "💡 <i>Mỗi đợt quét bot sẽ tự động cào proxy mới để chống chặn IP Viettel!</i>\n\n"
-                    "👉 <b>Gõ <code>/proxy fetch</code> để chủ động cào lại proxy ngay bây giờ.</b>"
+                    f"📊 <b>Proxy Viettel live:</b> <code>{vtl_count}</code> IP\n"
+                    f"📊 <b>Proxy Vietnamobile live:</b> <code>{vnmb_count}</code> IP\n"
+                    "💡 <i>Mỗi đợt quét bot sẽ tự động cào proxy mới để chống chặn IP!</i>\n\n"
+                    "👉 <b>Gõ <code>/proxy fetch</code> để cào mới proxy cả 2 nhà mạng ngay bây giờ.</b>"
                 )
                 self.send_message(chat_id, msg, reply_markup=self.get_main_keyboard())
 
@@ -670,7 +700,8 @@ class TelegramBot:
             interval_str = f"Mỗi <code>{interval}</code> phút" if interval > 0 else "Đang tắt"
             delay = self.config.get("delay_seconds", 1.5)
             max_workers = self.config.get("max_workers", 4)
-            proxy_count = ProxyPoolManager().get_proxy_count()
+            vtl_proxy_count = ProxyPoolManager().get_proxy_count()
+            vnmb_proxy_count = VietnamobileProxyPoolManager().get_proxy_count()
             probe_numbers = self.config.get("probe_numbers", {})
             active_probes = sum(1 for v in probe_numbers.values() if v and v.strip())
 
@@ -679,7 +710,8 @@ class TelegramBot:
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📊 <b>Tổng số SIM theo dõi:</b> <code>{total_count}</code> SIM\n"
                 f"⚡ <b>Luồng quét song song:</b> <code>{max_workers}</code> luồng\n"
-                f"🌐 <b>Kho Proxy live:</b> <code>{proxy_count}</code> IP\n"
+                f"🌐 <b>Kho Proxy Viettel:</b> <code>{vtl_proxy_count}</code> IP\n"
+                f"🌐 <b>Kho Proxy Vietnamobile:</b> <code>{vnmb_proxy_count}</code> IP\n"
                 f"🔬 <b>Số probe Health Check:</b> <code>{active_probes}/5</code> đã cài\n"
                 f"⏰ <b>Mốc giờ quét mỗi ngày:</b> {times}\n"
                 f"🔄 <b>Quét chu kỳ phút:</b> {interval_str}\n"
@@ -689,10 +721,12 @@ class TelegramBot:
             )
             self.send_message(chat_id, status_text, reply_markup=self.get_main_keyboard())
 
-    def run_health_check(self, initiator_chat_id: Optional[int | str] = None) -> Dict[str, bool]:
+    def run_health_check(self, initiator_chat_id: Optional[int | str] = None, refresh_vnmb_proxies: bool = True) -> Dict[str, bool]:
         """
         Run health checks against configured probe numbers for all carriers.
         Sends a formatted Telegram report of results.
+        refresh_vnmb_proxies: If True, scrapes fresh Vietnamobile proxies before probe check.
+                              Set to False when called from run_full_scan which pre-loads proxies.
         Returns: dict of probe_key -> passed (True/False).
         """
         probe_numbers = self.config.get("probe_numbers", {})
@@ -717,15 +751,28 @@ class TelegramBot:
 
         print(f"[*] Health Check: Đang kiểm tra {len(active_probes)} probe số...", flush=True)
 
-        # When triggered manually via Telegram, refresh proxy pool first for fresh proxies
+        # When triggered manually via Telegram, refresh Viettel and Vietnamobile proxy pools in parallel
         if initiator_chat_id and self.config.get("auto_proxy_refresh", True):
-            print("[*] Health Check: Cào proxy mới trước khi kiểm tra...", flush=True)
-            try:
-                ProxyPoolManager().reset_attempts()
-                ProxyPoolManager().refresh_proxies(target_count=10)
-                print("[*] Health Check: Proxy sẵn sàng.", flush=True)
-            except Exception as proxy_err:
-                print(f"[!] Health Check proxy refresh notice: {proxy_err}", flush=True)
+            print("[*] Health Check: Cào proxy mới song song trước khi kiểm tra...", flush=True)
+            def _fetch_vtl_hc():
+                try:
+                    ProxyPoolManager().reset_attempts()
+                    ProxyPoolManager().refresh_proxies(target_count=10, target_name="Viettel")
+                    print("[*] Health Check: Proxy Viettel sẵn sàng.", flush=True)
+                except Exception as proxy_err:
+                    print(f"[!] Health Check Viettel proxy notice: {proxy_err}", flush=True)
+
+            def _fetch_vnmb_hc():
+                if refresh_vnmb_proxies and "VIETNAMOBILE" in active_probes:
+                    try:
+                        VietnamobileProxyPoolManager().refresh_proxies(target_count=10, max_attempts=5)
+                        print("[*] Health Check: Proxy Vietnamobile sẵn sàng.", flush=True)
+                    except Exception as proxy_err:
+                        print(f"[!] Health Check VNMB proxy notice: {proxy_err}", flush=True)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as px_executor:
+                px_executor.submit(_fetch_vtl_hc)
+                px_executor.submit(_fetch_vnmb_hc)
 
         hub = SimCheckerHub(proxy=self.config.get("proxy"), delay=0.5)
         hc_results = hub.health_check(active_probes)
@@ -773,18 +820,30 @@ class TelegramBot:
 
         self.is_scanning = True
         try:
-            # Reset attempt counters and fetch 10 fresh live proxies before starting scan
-            ProxyPoolManager().reset_attempts()
+            # Pre-scan: Refresh Viettel and Vietnamobile proxy pools in parallel
             if self.config.get("auto_proxy_refresh", True):
-                print("[*] Pre-scan: Auto running Proxy Hunter to fetch 10 fresh live proxies...", flush=True)
-                try:
-                    fast_list = ProxyPoolManager().refresh_proxies(target_count=10)
-                    print(f"[*] Pre-scan: Đã cào xong {len(fast_list)} proxy live.", flush=True)
-                except Exception as err:
-                    print(f"[!] Pre-scan proxy refresh notice: {err}", flush=True)
+                print("[*] Pre-scan: Cào proxy live mới song song cho Viettel và Vietnamobile...", flush=True)
+                def _fetch_vtl_scan():
+                    try:
+                        ProxyPoolManager().reset_attempts()
+                        fast_list = ProxyPoolManager().refresh_proxies(target_count=10, target_name="Viettel")
+                        print(f"[*] Pre-scan: Đã cào xong {len(fast_list)} proxy Viettel live.", flush=True)
+                    except Exception as err:
+                        print(f"[!] Pre-scan Viettel proxy notice: {err}", flush=True)
 
-            # Health check: verify each carrier API is functional before scanning
-            health_results = self.run_health_check(initiator_chat_id=initiator_chat_id)
+                def _fetch_vnmb_scan():
+                    try:
+                        VietnamobileProxyPoolManager().refresh_proxies(target_count=10, max_attempts=5)
+                        print("[*] Pre-scan: Proxy Vietnamobile sẵn sàng.", flush=True)
+                    except Exception as err:
+                        print(f"[!] Pre-scan Vietnamobile proxy notice: {err}", flush=True)
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as px_executor:
+                    px_executor.submit(_fetch_vtl_scan)
+                    px_executor.submit(_fetch_vnmb_scan)
+
+            # Step 2: Health check — skip internal Vietnamobile proxy refresh (already done above)
+            health_results = self.run_health_check(initiator_chat_id=initiator_chat_id, refresh_vnmb_proxies=False)
 
             # Determine which carriers to skip based on failed health checks
             skip_carriers: set = set()
@@ -909,6 +968,12 @@ class TelegramBot:
             try:
                 # Reload config every loop iteration so manual edits to config.json take effect immediately
                 self.config = ConfigManager.load()
+                
+                # Skip scheduler checks if automated scanning is disabled
+                if not self.config.get("auto_scan_enabled", True):
+                    time.sleep(10)
+                    continue
+
                 now = datetime.datetime.now()
                 now_str = now.strftime("%H:%M")
                 

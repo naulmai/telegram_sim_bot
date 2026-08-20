@@ -9,5 +9,13 @@
     "19:00"
   ],
   "interval_minutes": 0,
-  "auto_scan_enabled": true
+  "auto_scan_enabled": true,
+  "auto_proxy_refresh": true,
+  "probe_numbers": {
+    "VIETTEL_PREPAID": "",
+    "VIETTEL_POSTPAID": "",
+    "MOBIFONE": "",
+    "VINAPHONE": "",
+    "VIETNAMOBILE": ""
+  }
 }

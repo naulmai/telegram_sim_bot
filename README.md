@@ -35,4 +35,6 @@ Hệ thống Bot Telegram tự động theo dõi và kiểm tra tình trạng SI
 - `/set_time <HH:MM>` : Hẹn giờ tự động quét mỗi ngày (Ví dụ: `/set_time 08:00, 12:00, 19:30`).
 - `/set_interval <phút>` : Quét định kỳ sau mỗi X phút.
 - `/set_delay <giây>` : Đặt thời gian delay giữa các lần check.
-- `/status` : Xem trạng thái bot.
+- `/status` : Xem trạng thái hệ thống và kho Proxy live.
+- `/proxy` : Xem kho Proxy và kích hoạt cào mới Proxy song song (`/proxy fetch`).
+- `/probe` : Cấu hình số probe Health Check cho từng nhà mạng (`/probe viettel_prepaid 09xx...` hoặc `/probe test`).
