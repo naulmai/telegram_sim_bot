@@ -460,7 +460,7 @@ class VietnamobileApiChecker:
 
             # Try 1: Fast curl_cffi session
             try:
-                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=6, verify=False)
+                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=15, verify=False)
                 if response.status_code == 200:
                     html_text = response.content.decode("utf-8", errors="ignore")
                     return self._parse_html_response(html_text, clean_num)
@@ -470,9 +470,11 @@ class VietnamobileApiChecker:
 
             # Try 2: Standard urllib fallback (bypasses curl_cffi TLS impersonation issues on ARM/Linux)
             try:
+                import ssl
+                ctx = ssl._create_unverified_context()
                 encoded_data = urllib.parse.urlencode(data).encode("utf-8")
                 req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
-                with urllib.request.urlopen(req, timeout=6) as resp:
+                with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
                     if resp.status == 200:
                         html_text = resp.read().decode("utf-8", errors="ignore")
                         return self._parse_html_response(html_text, clean_num)
