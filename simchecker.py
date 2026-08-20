@@ -391,15 +391,14 @@ class VinaphoneApiChecker:
 
 
 class VietnamobileApiChecker:
-    """Fast backend checker for Vietnamobile SIM inventory with configurable delay and urllib fallback for ARM/Linux compatibility."""
+    """Fast backend checker for Vietnamobile SIM inventory with configurable delay, urllib fallback, and auto proxy rotation if IP is blocked."""
 
     BASE_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
-        # NOTE: Vietnamobile does NOT require proxy — site is public and not IP-blocked.
-        # Session uses direct connection.
         self.session = requests.Session(impersonate="chrome131")
         self.delay = delay
+        self.proxy_pool = ProxyPoolManager()
         self.headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "content-type": "application/x-www-form-urlencoded",
@@ -411,6 +410,8 @@ class VietnamobileApiChecker:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
         }
+        if proxy:
+            self.session.proxies = {"http": proxy, "https": proxy}
 
     def _parse_html_response(self, html_text: str, clean_num: str) -> Dict[str, Any]:
         """Parse raw HTML response from Vietnamobile so-dep search."""
@@ -443,7 +444,7 @@ class VietnamobileApiChecker:
         else:
             return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
 
-    def search_sim(self, clean_num: str, max_retries: int = 2) -> Dict[str, Any]:
+    def search_sim(self, clean_num: str, max_retries: int = 3) -> Dict[str, Any]:
         data = {
             "patten": clean_num,
             "page": "1",
@@ -454,33 +455,45 @@ class VietnamobileApiChecker:
         }
 
         last_error = None
-        for attempt in range(max_retries):
-            if self.delay > 0 and attempt > 0:
-                time.sleep(self.delay)
 
-            # Try 1: Fast curl_cffi session
-            try:
-                response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=15, verify=False)
-                if response.status_code == 200:
-                    html_text = response.content.decode("utf-8", errors="ignore")
+        # Step 1: Direct attempt via curl_cffi
+        try:
+            response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=6, verify=False)
+            if response.status_code == 200:
+                html_text = response.content.decode("utf-8", errors="ignore")
+                return self._parse_html_response(html_text, clean_num)
+            last_error = f"HTTP {response.status_code}"
+        except Exception as e:
+            last_error = str(e)
+
+        # Step 2: Direct urllib fallback
+        try:
+            import ssl
+            ctx = ssl._create_unverified_context()
+            encoded_data = urllib.parse.urlencode(data).encode("utf-8")
+            req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
+            with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+                if resp.status == 200:
+                    html_text = resp.read().decode("utf-8", errors="ignore")
                     return self._parse_html_response(html_text, clean_num)
-                last_error = f"HTTP {response.status_code}"
-            except Exception as e:
-                last_error = str(e)
+        except Exception as urllib_err:
+            last_error = str(urllib_err)
 
-            # Try 2: Standard urllib fallback (bypasses curl_cffi TLS impersonation issues on ARM/Linux)
+        # Step 3: Direct connection failed/timed out (e.g. IP blocked on server/ARM device). Try live proxies!
+        print(f"[!] Vietnamobile direct IP error ({last_error}). Rotating live proxy...", flush=True)
+        for attempt in range(max_retries):
+            px = self.proxy_pool.get_next_proxy()
+            if not px:
+                break
             try:
-                import ssl
-                ctx = ssl._create_unverified_context()
-                encoded_data = urllib.parse.urlencode(data).encode("utf-8")
-                req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
-                with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-                    if resp.status == 200:
-                        html_text = resp.read().decode("utf-8", errors="ignore")
-                        return self._parse_html_response(html_text, clean_num)
-            except Exception as urllib_err:
-                last_error = str(urllib_err)
-                print(f"[!] Vietnamobile urllib fallback attempt {attempt + 1}/{max_retries} failed: {last_error}", flush=True)
+                s = requests.Session(impersonate="chrome131")
+                s.proxies = {"http": px, "https": px}
+                resp = s.post(self.BASE_URL, data=data, headers=self.headers, timeout=8, verify=False)
+                if resp.status_code == 200:
+                    html_text = resp.content.decode("utf-8", errors="ignore")
+                    return self._parse_html_response(html_text, clean_num)
+            except Exception as px_err:
+                last_error = str(px_err)
 
         return {"phone": clean_num, "carrier": "VIETNAMOBILE", "available": None, "error": last_error or "Lỗi kết nối Vietnamobile"}
 
