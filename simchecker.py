@@ -680,11 +680,26 @@ class SimCheckerHub:
                 return False, res.get("note", "Số probe không tìm thấy")
             return _fn
 
+        def _check_vietnamobile_probe(clean: str) -> tuple:
+            """Check Vietnamobile probe after refreshing 10 fresh live proxies."""
+            try:
+                print("[*] Health Check Vietnamobile: Tiến hành quét mới 10 Proxy live cho Vietnamobile...", flush=True)
+                self.vietnamobile_checker.proxy_pool.refresh_proxies(target_count=10, max_attempts=5)
+            except Exception as exc:
+                print(f"[!] Lỗi quét mới Proxy cho Vietnamobile Health Check: {exc}", flush=True)
+
+            res = self.vietnamobile_checker.search_sim(clean)
+            if res.get("available") is True:
+                return True, "OK"
+            if res.get("error"):
+                return False, f"Lỗi API: {res['error']}"
+            return False, res.get("note", "Số probe không tìm thấy")
+
         _run_probe("VIETTEL_PREPAID",  _check_viettel_prepaid)
         _run_probe("VIETTEL_POSTPAID", _check_viettel_postpaid)
         _run_probe("MOBIFONE",         _make_generic_checker(self.mobifone_checker.search_sim))
         _run_probe("VINAPHONE",        _make_generic_checker(self.vinaphone_checker.search_sim))
-        _run_probe("VIETNAMOBILE",     _make_generic_checker(self.vietnamobile_checker.search_sim))
+        _run_probe("VIETNAMOBILE",     _check_vietnamobile_probe)
 
         return results
 
