@@ -391,12 +391,15 @@ class VinaphoneApiChecker:
 
 
 class VietnamobileApiChecker:
-    """Fast backend checker for Vietnamobile SIM inventory with configurable delay, urllib fallback, and auto proxy rotation if IP is blocked."""
+    """Fast backend checker for Vietnamobile SIM inventory with configurable delay, urllib direct fallback, and auto proxy rotation if IP is blocked."""
 
     BASE_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
+        # NOTE: Vietnamobile does NOT use config.proxy by default — direct connection is fastest & reliable.
+        # Direct session intentionally ignores static proxy parameter to avoid dead proxies.
         self.session = requests.Session(impersonate="chrome131")
+        self.session.proxies = {}
         self.delay = delay
         self.proxy_pool = ProxyPoolManager()
         self.headers = {
@@ -410,8 +413,6 @@ class VietnamobileApiChecker:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
         }
-        if proxy:
-            self.session.proxies = {"http": proxy, "https": proxy}
 
     def _parse_html_response(self, html_text: str, clean_num: str) -> Dict[str, Any]:
         """Parse raw HTML response from Vietnamobile so-dep search."""
@@ -456,7 +457,7 @@ class VietnamobileApiChecker:
 
         last_error = None
 
-        # Step 1: Direct attempt via curl_cffi
+        # Step 1: Direct attempt via curl_cffi (no proxy)
         try:
             response = self.session.post(self.BASE_URL, data=data, headers=self.headers, timeout=6, verify=False)
             if response.status_code == 200:
@@ -466,13 +467,14 @@ class VietnamobileApiChecker:
         except Exception as e:
             last_error = str(e)
 
-        # Step 2: Direct urllib fallback
+        # Step 2: Direct urllib fallback (bypasses curl_cffi and environment proxies completely)
         try:
             import ssl
             ctx = ssl._create_unverified_context()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx))
             encoded_data = urllib.parse.urlencode(data).encode("utf-8")
             req = urllib.request.Request(self.BASE_URL, data=encoded_data, headers=self.headers)
-            with urllib.request.urlopen(req, timeout=6, context=ctx) as resp:
+            with opener.open(req, timeout=6) as resp:
                 if resp.status == 200:
                     html_text = resp.read().decode("utf-8", errors="ignore")
                     return self._parse_html_response(html_text, clean_num)
