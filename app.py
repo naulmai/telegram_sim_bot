@@ -180,6 +180,7 @@ class TelegramBot:
         self.is_scanning = False
         self.last_interval_scan = time.time()
         self.last_checked_minute = ""
+        self._search_mode_users: set = set()  # Track users in SIM search mode
         set_telegram_notify_callback(lambda msg: self.broadcast(msg))
 
     @property
@@ -194,10 +195,18 @@ class TelegramBot:
                 [{"text": "➕ Thêm Số Theo Dõi"}, {"text": "🗑 Xóa Số"}],
                 [{"text": "🔬 Xem Probe"}, {"text": "▶️ Chạy Health Check"}],
                 [{"text": "🔄 Trạng Thái Proxy"}, {"text": "⚙️ Trạng Thái Bot"}],
-                [{"text": "⏰ Cài Đặt Hẹn Giờ"}]
+                [{"text": "⏰ Cài Đặt Hẹn Giờ"}, {"text": "🔍 Tra Cứu SIM"}]
             ],
             "resize_keyboard": True,
             "persistent": True
+        }
+
+    def get_search_mode_keyboard(self) -> Dict[str, Any]:
+        """Inline keyboard shown while user is in SIM search mode."""
+        return {
+            "inline_keyboard": [
+                [{"text": "❌ Thoát Tra Cứu", "callback_data": "action_exit_search"}]
+            ]
         }
 
     def send_message(self, chat_id: int | str, text: str, reply_markup: Optional[Dict[str, Any]] = None, parse_mode: str = "HTML") -> bool:
@@ -300,7 +309,39 @@ class TelegramBot:
         clean_text = text.strip()
         print(f"[+] User {chat_id} sent: {clean_text}")
 
-        if clean_text in ["🚀 Quét Toàn Bộ SIM", "Quét Ngay"]:
+        # --- Search Mode: intercept phone numbers while user is in search mode ---
+        if chat_id in self._search_mode_users:
+            # Allow exit commands / menu buttons to pass through normally
+            if clean_text in ["❌ Thoát Tra Cứu", "/exit_search"]:
+                self._search_mode_users.discard(chat_id)
+                self.send_message(
+                    chat_id,
+                    "✅ <b>Đã thoát chế độ Tra Cứu SIM.</b>\nBạn có thể dùng menu bên dưới để tiếp tục.",
+                    reply_markup=self.get_main_keyboard()
+                )
+                return
+            # If it looks like a phone number, handle as search
+            phone_match = re.match(r'^[0-9]{9,11}$', re.sub(r'[\s\-.]', '', clean_text))
+            if phone_match:
+                self.handle_search_sim(chat_id, clean_text)
+                return
+            # If it's another keyboard button or command, exit search mode first then handle normally
+            self._search_mode_users.discard(chat_id)
+
+        if clean_text in ["🔍 Tra Cứu SIM", "/search"]:
+            self._search_mode_users.add(chat_id)
+            msg = (
+                "🔍 <b>CHẾ ĐỘ TRA CỨU SIM ĐÃ BẬT!</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "📲 <b>Gửi số điện thoại</b> bất kỳ để kiểm tra tức thì:\n\n"
+                "▫ Bot sẽ <b>tự động nhận diện nhà mạng</b> từ đầu số\n"
+                "▫ Tra kho và trả kết quả <b>ngay lập tức</b>\n"
+                "▫ Gửi <b>nhiều số liên tiếp</b> để tra nhiều SIM\n\n"
+                "💡 <i>Nhấn nút bên dưới hoặc gõ /exit_search để thoát.</i>"
+            )
+            self.send_message(chat_id, msg, reply_markup=self.get_search_mode_keyboard())
+            return
+        elif clean_text in ["🚀 Quét Toàn Bộ SIM", "Quét Ngay"]:
             self.handle_command(chat_id, "/scan", [])
         elif clean_text in ["📋 Xem Danh Sách", "Danh Sách"]:
             self.handle_command(chat_id, "/list", [])
@@ -356,6 +397,104 @@ class TelegramBot:
             self.handle_command(chat_id, "/check", [clean_text])
         else:
             self.handle_command(chat_id, "/start", [])
+
+    def handle_search_sim(self, chat_id: int | str, raw_phone: str):
+        """Handle SIM lookup in search mode: detect carrier, query stock, reply with result."""
+        # Normalize phone number
+        clean_num = re.sub(r'\D', '', raw_phone)
+        if clean_num.startswith("84") and len(clean_num) == 11:
+            clean_num = "0" + clean_num[2:]
+        elif not clean_num.startswith("0") and len(clean_num) == 9:
+            clean_num = "0" + clean_num
+
+        if len(clean_num) != 10:
+            self.send_message(
+                chat_id,
+                "⚠️ <b>Số điện thoại không hợp lệ!</b>\n"
+                "Vui lòng nhập đúng định dạng 10 chữ số (VD: <code>0981945794</code>).",
+                reply_markup=self.get_search_mode_keyboard()
+            )
+            return
+
+        # Detect carrier from prefix
+        carrier = CarrierDetector.get_carrier(clean_num)
+        carrier_display = {
+            "VIETTEL":     "Viettel",
+            "MOBIFONE":    "MobiFone",
+            "VINAPHONE":   "VinaPhone",
+            "VIETNAMOBILE": "Vietnamobile",
+        }.get(carrier, carrier)
+
+        if carrier == "UNKNOWN":
+            self.send_message(
+                chat_id,
+                f"❓ <b>Không nhận diện được nhà mạng</b> cho số <code>{clean_num}</code>\n"
+                f"Đầu số <code>{clean_num[:3]}</code> chưa nằm trong danh sách nhận diện.",
+                reply_markup=self.get_search_mode_keyboard()
+            )
+            return
+
+        # Notify user we're checking (with carrier info)
+        carrier_emoji = {
+            "VIETTEL":     "🔴",
+            "MOBIFONE":    "🟠",
+            "VINAPHONE":   "🔵",
+            "VIETNAMOBILE": "🟢",
+        }.get(carrier, "📱")
+        self.send_message(
+            chat_id,
+            f"{carrier_emoji} Nhận diện: <b>{carrier_display}</b> — Đang tra kho..."
+        )
+
+        # Run check in background thread to avoid blocking polling loop
+        def _do_search():
+            try:
+                hub = SimCheckerHub(
+                    proxy=self.config.get("proxy"),
+                    delay=self.config.get("delay_seconds", 1.5)
+                )
+                res = hub.check_sim(clean_num)
+
+                if res.get("available"):
+                    item = res["items"][0]
+                    raw_type = item.get("type", "N/A")
+                    clean_type = html.escape(re.sub(r'<[^>]+>', ' ', str(raw_type)).strip())
+                    clean_price = html.escape(str(item.get("price", "")))
+                    result_text = (
+                        f"🎉 <b>KẾT QUẢ TRA CỨU</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"{carrier_emoji} <b>Nhà mạng:</b> {carrier_display}\n"
+                        f"📱 <b>Số SIM:</b> <code>{item['phone']}</code>\n"
+                        f"✅ <b>Trạng thái:</b> <b>CÒN BÁN TRÊN KHO</b>\n"
+                        f"🏷 <b>Loại:</b> {clean_type}\n"
+                        f"💰 <b>Giá:</b> {clean_price}\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"💡 <i>Gửi số tiếp theo để tra cứu thêm.</i>"
+                    )
+                else:
+                    raw_note = res.get("note") or res.get("error") or "Đã bán hoặc chưa lên kho"
+                    clean_note = html.escape(re.sub(r'<[^>]+>', ' ', str(raw_note)).strip())
+                    result_text = (
+                        f"❌ <b>KẾT QUẢ TRA CỨU</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"{carrier_emoji} <b>Nhà mạng:</b> {carrier_display}\n"
+                        f"📱 <b>Số SIM:</b> <code>{clean_num}</code>\n"
+                        f"🚫 <b>Trạng thái:</b> KHÔNG CÓ TRONG KHO\n"
+                        f"ℹ️ <b>Ghi chú:</b> {clean_note}\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"💡 <i>Gửi số tiếp theo để tra cứu thêm.</i>"
+                    )
+
+                self.send_message(chat_id, result_text, reply_markup=self.get_search_mode_keyboard())
+
+            except Exception as e:
+                self.send_message(
+                    chat_id,
+                    f"⚠️ <b>Lỗi khi tra cứu số <code>{clean_num}</code>:</b> {html.escape(str(e))}",
+                    reply_markup=self.get_search_mode_keyboard()
+                )
+
+        threading.Thread(target=_do_search, daemon=True).start()
 
     def handle_command(self, chat_id: int | str, command: str, args: List[str]):
         """Process incoming bot command."""
@@ -1054,6 +1193,17 @@ class TelegramBot:
                             self.handle_command(cb_chat_id, "/status", [])
                         elif cb_data == "action_help":
                             self.handle_command(cb_chat_id, "/help", [])
+                        elif cb_data == "action_search":
+                            # Activate search mode via inline button
+                            self.handle_text_or_command(cb_chat_id, "🔍 Tra Cứu SIM")
+                        elif cb_data == "action_exit_search":
+                            # Deactivate search mode and return to main menu
+                            self._search_mode_users.discard(cb_chat_id)
+                            self.send_message(
+                                cb_chat_id,
+                                "✅ <b>Đã thoát chế độ Tra Cứu SIM.</b>\nBạn có thể dùng menu bên dưới để tiếp tục.",
+                                reply_markup=self.get_main_keyboard()
+                            )
                         continue
 
                     # 2. Handle Regular Message
