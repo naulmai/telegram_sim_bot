@@ -982,28 +982,7 @@ class TelegramBot:
                     px_executor.submit(_fetch_vtl_scan)
                     px_executor.submit(_fetch_vnmb_scan)
 
-            # Step 2: Health check — skip internal Vietnamobile proxy refresh (already done above)
-            health_results = self.run_health_check(initiator_chat_id=initiator_chat_id, refresh_vnmb_proxies=False)
-
-            # Determine which carriers to skip based on failed health checks
-            skip_carriers: set = set()
-            active_probes = {k: v.strip() for k, v in self.config.get("probe_numbers", {}).items() if v and v.strip()}
-            if active_probes:
-                for carrier in ["MOBIFONE", "VINAPHONE", "VIETNAMOBILE"]:
-                    if carrier in active_probes and not health_results.get(carrier, True):
-                        skip_carriers.add(carrier)
-                # Viettel: skip only if ALL configured Viettel probes fail
-                has_pre  = "VIETTEL_PREPAID"  in active_probes
-                has_post = "VIETTEL_POSTPAID" in active_probes
-                if has_pre or has_post:
-                    pre_ok  = health_results.get("VIETTEL_PREPAID",  not has_pre)
-                    post_ok = health_results.get("VIETTEL_POSTPAID", not has_post)
-                    if not pre_ok and not post_ok:
-                        skip_carriers.add("VIETTEL")
-
-            if skip_carriers:
-                print(f"[!] Health Check FAIL — Bỏ qua carrier: {skip_carriers}", flush=True)
-
+            # Health check is disabled during full scan
             watchlist = WatchlistManager.load()
             delay = self.config.get("delay_seconds", 1.5)
             proxy = self.config.get("proxy")
@@ -1011,9 +990,6 @@ class TelegramBot:
 
             total_sims = []
             for carrier, nums in watchlist.items():
-                if carrier in skip_carriers:
-                    print(f"[!] Bỏ qua {carrier} do Health Check FAIL.", flush=True)
-                    continue
                 for num in nums:
                     total_sims.append({"phone": num, "carrier": carrier})
 

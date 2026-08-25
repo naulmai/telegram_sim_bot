@@ -354,7 +354,8 @@ class VinaphoneApiChecker:
         }
 
         try:
-            for attempt in range(3):
+            items = []  # Default in case all retries fail with a non-error path
+            for attempt in range(5):
                 response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
                 if response.status_code != 200:
                     return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "error": f"HTTP {response.status_code}"}
@@ -362,7 +363,7 @@ class VinaphoneApiChecker:
                 data = response.json()
                 error_code = data.get("errorCode")
                 if error_code is not None and error_code != 0:
-                    if attempt < 2:
+                    if attempt < 4:
                         time.sleep(self.delay or 1.0)
                         continue
                     return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": data.get("message", f"API Error {error_code}")}
