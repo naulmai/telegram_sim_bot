@@ -353,9 +353,12 @@ class VinaphoneApiChecker:
             "commit": "0"
         }
 
+        MAX_RETRIES = 20  # Safety cap to prevent infinite loops
         try:
-            items = []  # Default in case all retries fail with a non-error path
-            for attempt in range(5):
+            items = []  # Default in case all retries fail
+            attempt = 0
+            while attempt < MAX_RETRIES:
+                attempt += 1
                 response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
                 if response.status_code != 200:
                     return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "error": f"HTTP {response.status_code}"}
@@ -363,16 +366,20 @@ class VinaphoneApiChecker:
                 data = response.json()
                 error_code = data.get("errorCode")
                 if error_code is not None and error_code != 0:
-                    if attempt < 4:
-                        print(f"  [~] VINAPHONE {clean_num}: Lần thử {attempt+1}/5 bị lỗi API ({data.get('message', '')}), thử lại...", flush=True)
-                        time.sleep(self.delay or 1.0)
-                        continue
                     err_msg = data.get("message", f"API Error {error_code}")
-                    print(f"  [!] VINAPHONE {clean_num}: Thất bại sau 5 lần thử — {err_msg}", flush=True)
-                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": err_msg}
+                    print(f"  [~] VINAPHONE {clean_num}: Lần {attempt}/{MAX_RETRIES} bị lỗi API ({err_msg}), thử lại...", flush=True)
+                    time.sleep(self.delay or 1.0)
+                    continue
 
+                # errorCode == 0: success
                 items = data.get("data", [])
                 break
+            else:
+                # Exhausted all retries
+                err_msg = data.get("message", "Hệ thống bận sau nhiều lần thử lại")
+                print(f"  [!] VINAPHONE {clean_num}: Thất bại sau {MAX_RETRIES} lần thử — {err_msg}", flush=True)
+                return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": err_msg}
+
 
             matched_items = []
             for item in items:
