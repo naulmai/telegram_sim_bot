@@ -320,13 +320,13 @@ class MobifoneApiChecker:
 
 
 class VinaphoneApiChecker:
-    """Fast backend checker for VinaPhone SIM inventory with configurable delay."""
+    """Fast backend checker for VinaPhone SIM inventory with proxy rotation support."""
 
     BASE_URL = "https://digishop.vnpt.vn/apiprod/v2/simso/num_search"
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
-        self.session = requests.Session(impersonate="chrome131")
         self.delay = delay
+        self.proxy_pool = ProxyPoolManager()
         self.headers = {
             "accept": "*/*",
             "referer": "https://digishop.vnpt.vn/sim-so?tab=c320",
@@ -337,8 +337,32 @@ class VinaphoneApiChecker:
                 "Chrome/131.0.0.0 Safari/537.36"
             ),
         }
+        self.session = requests.Session(impersonate="chrome131")
         if proxy:
             self.session.proxies = {"http": proxy, "https": proxy}
+
+    def _rotate_proxy(self) -> Optional[str]:
+        """Fetch next live proxy from pool when Vinaphone rate limits the current IP."""
+        new_proxy = self.proxy_pool.get_next_proxy()
+        if not new_proxy:
+            print("[!] Proxy Vinaphone het -- Cao dot 10 proxy live moi...", flush=True)
+            try:
+                self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=10, target_name="Vinaphone")
+                new_proxy = self.proxy_pool.get_next_proxy()
+            except RuntimeError as err:
+                print(f"[!] {err}", flush=True)
+                return None
+
+        if new_proxy:
+            print(f"[*] Vinaphone bi chan IP -> Doi sang Proxy: {new_proxy}", flush=True)
+            try:
+                self.session = requests.Session(impersonate="chrome131")
+                self.session.proxies = {"http": new_proxy, "https": new_proxy}
+            except Exception as e:
+                print(f"[!] Loi set proxy Vinaphone: {e}", flush=True)
+        else:
+            print("[!] Khong tim thay proxy Vinaphone kha dung.", flush=True)
+        return new_proxy
 
     def search_sim(self, clean_num: str) -> Dict[str, Any]:
         if self.delay > 0:
@@ -357,18 +381,29 @@ class VinaphoneApiChecker:
         try:
             items = []  # Default in case all retries fail
             attempt = 0
+            last_err_msg = "Khong ro nguyen nhan"
             while attempt < MAX_RETRIES:
                 attempt += 1
-                response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
+                try:
+                    response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
+                except Exception as net_err:
+                    last_err_msg = str(net_err)
+                    print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} loi ket noi ({last_err_msg}), doi proxy...", flush=True)
+                    self._rotate_proxy()
+                    continue
+
                 if response.status_code != 200:
-                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "error": f"HTTP {response.status_code}"}
+                    last_err_msg = f"HTTP {response.status_code}"
+                    print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} {last_err_msg}, doi proxy...", flush=True)
+                    self._rotate_proxy()
+                    continue
 
                 data = response.json()
                 error_code = data.get("errorCode")
                 if error_code is not None and error_code != 0:
-                    err_msg = data.get("message", f"API Error {error_code}")
-                    print(f"  [~] VINAPHONE {clean_num}: Lần {attempt}/{MAX_RETRIES} bị lỗi API ({err_msg}), thử lại...", flush=True)
-                    time.sleep(self.delay or 1.0)
+                    last_err_msg = data.get("message", f"API Error {error_code}")
+                    print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} bi chan IP ({last_err_msg}), doi proxy...", flush=True)
+                    self._rotate_proxy()
                     continue
 
                 # errorCode == 0: success
@@ -376,10 +411,8 @@ class VinaphoneApiChecker:
                 break
             else:
                 # Exhausted all retries
-                err_msg = data.get("message", "Hệ thống bận sau nhiều lần thử lại")
-                print(f"  [!] VINAPHONE {clean_num}: Thất bại sau {MAX_RETRIES} lần thử — {err_msg}", flush=True)
-                return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": err_msg}
-
+                print(f"  [!] VINAPHONE {clean_num}: That bai sau {MAX_RETRIES} lan thu -- {last_err_msg}", flush=True)
+                return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": last_err_msg}
 
             matched_items = []
             for item in items:
@@ -394,24 +427,24 @@ class VinaphoneApiChecker:
                     raw_kieuso = str(item.get("kieuso_name") or "N/A")
                     kieuso = re.sub(r'<[^>]+>', ' ', raw_kieuso).strip()
                     kieuso = re.sub(r'\s+', ' ', kieuso)
-                    
+
                     matched_items.append({
                         "phone": full_phone,
                         "type": kieuso,
-                        "price": f"{int(price):,} VNĐ" if isinstance(price, (int, float)) else str(price),
+                        "price": f"{int(price):,} VND" if isinstance(price, (int, float)) else str(price),
                         "raw": item
                     })
 
             if matched_items:
                 return {"phone": clean_num, "carrier": "VINAPHONE", "available": True, "count": len(matched_items), "items": matched_items}
             else:
-                return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "note": "Số không có trong kho hoặc đã được bán"}
+                return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "note": "So khong co trong kho hoac da duoc ban"}
 
         except Exception as e:
             return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": str(e)}
 
-
 class VietnamobileApiChecker:
+
     """Fast backend checker for Vietnamobile SIM inventory with configurable delay, urllib direct fallback, and auto proxy rotation if IP is blocked."""
 
     BASE_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
