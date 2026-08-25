@@ -364,9 +364,12 @@ class VinaphoneApiChecker:
                 error_code = data.get("errorCode")
                 if error_code is not None and error_code != 0:
                     if attempt < 4:
+                        print(f"  [~] VINAPHONE {clean_num}: Lần thử {attempt+1}/5 bị lỗi API ({data.get('message', '')}), thử lại...", flush=True)
                         time.sleep(self.delay or 1.0)
                         continue
-                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": data.get("message", f"API Error {error_code}")}
+                    err_msg = data.get("message", f"API Error {error_code}")
+                    print(f"  [!] VINAPHONE {clean_num}: Thất bại sau 5 lần thử — {err_msg}", flush=True)
+                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": err_msg}
 
                 items = data.get("data", [])
                 break

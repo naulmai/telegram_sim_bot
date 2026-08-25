@@ -1009,10 +1009,15 @@ class TelegramBot:
             def scan_progress_cb(res, current_idx, total_count):
                 carrier = res.get("carrier", "UNKNOWN")
                 num = res.get("phone", "")
-                if res.get("available"):
+                if res.get("available") is True:
                     hits.append(res)
                     first_item = res["items"][0]
                     print(f"  [{current_idx}/{total_count}] [+] HIT: {num} [{carrier}] - {first_item['price']}", flush=True)
+                elif res.get("available") is None:
+                    # API error (e.g. Vinaphone system busy after 5 retries)
+                    bads.append(res)
+                    err_msg = res.get('error', 'Lỗi API không xác định')
+                    print(f"  [{current_idx}/{total_count}] [!] ERR: {num} [{carrier}] - {err_msg}", flush=True)
                 else:
                     bads.append(res)
                     print(f"  [{current_idx}/{total_count}] [-] BAD: {num} [{carrier}] - {res.get('note', 'Không có trong kho')}", flush=True)
