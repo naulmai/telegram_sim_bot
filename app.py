@@ -1119,11 +1119,12 @@ class TelegramBot:
                 
                 # Check fixed daily scheduled times
                 scheduled_times = self.config.get("scheduled_times", [])
-                if now_str in scheduled_times and now_str != self.last_checked_minute:
+                if now_str != self.last_checked_minute:
                     self.last_checked_minute = now_str
-                    if not self.is_scanning:
-                        print(f"⏰ [Scheduler] Triggering scheduled scan for {now_str}...", flush=True)
-                        threading.Thread(target=self.run_full_scan, daemon=True).start()
+                    if now_str in scheduled_times:
+                        if not self.is_scanning:
+                            print(f"⏰ [Scheduler] Triggering scheduled scan for {now_str}...", flush=True)
+                            threading.Thread(target=self.run_full_scan, daemon=True).start()
 
                 # Check interval minutes
                 interval_min = self.config.get("interval_minutes", 0)
