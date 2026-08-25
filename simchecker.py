@@ -354,12 +354,21 @@ class VinaphoneApiChecker:
         }
 
         try:
-            response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
-            if response.status_code != 200:
-                return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "error": f"HTTP {response.status_code}"}
+            for attempt in range(3):
+                response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
+                if response.status_code != 200:
+                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": False, "error": f"HTTP {response.status_code}"}
 
-            data = response.json()
-            items = data.get("data", [])
+                data = response.json()
+                error_code = data.get("errorCode")
+                if error_code is not None and error_code != 0:
+                    if attempt < 2:
+                        time.sleep(self.delay or 1.0)
+                        continue
+                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": data.get("message", f"API Error {error_code}")}
+
+                items = data.get("data", [])
+                break
 
             matched_items = []
             for item in items:
