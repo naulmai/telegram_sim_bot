@@ -87,14 +87,16 @@ PROXY_SOURCES = [
 
 TEST_URL = "https://vietteltelecom.vn/vx/di-dong/sim-so/#"
 VNMB_URL = "https://shop.vietnamobile.com.vn/vn/so-dep"
+VNP_URL  = "https://digishop.vnpt.vn/sim-so?tab=c320"
 
 FETCH_TIMEOUT = 15
 PROXY_TIMEOUT = 5
-MAX_WORKERS = 80
+MAX_WORKERS = 40
 MIN_LATENCY = 0
 MAX_LATENCY = 5000
 OUTPUT_FAST      = "fast_proxies.txt"          # Viettel live proxies
 OUTPUT_FAST_VNMB = "fast_proxies_vnmb.txt"     # Vietnamobile live proxies (separate pool)
+OUTPUT_FAST_VNP  = "fast_proxies_vnp.txt"      # Vinaphone live proxies (separate pool)
 PROXY_REGEX = re.compile(
     r"(?<!\d)"
     r"(?:\d{1,3}\.){3}\d{1,3}"
@@ -151,7 +153,23 @@ def fetch_source(url: str) -> Set[str]:
         return set()
 
 
-def collect_proxies() -> List[str]:
+_cached_raw_proxies: List[str] = []
+_last_raw_collect_time: float = 0.0
+_collect_lock = threading.Lock()
+
+
+def collect_proxies(cache_ttl: float = 300) -> List[str]:
+    """Collect public proxies with thread-safe TTL cache (5 mins) to prevent redundant GitHub fetches."""
+    global _cached_raw_proxies, _last_raw_collect_time
+    with _collect_lock:
+        now = time.time()
+        if _cached_raw_proxies and (now - _last_raw_collect_time < cache_ttl):
+            remaining = int(cache_ttl - (now - _last_raw_collect_time))
+            print(f"[*] Tái sử dụng {len(_cached_raw_proxies)} raw proxies từ cache (hết hạn sau {remaining}s)...", flush=True)
+            res = list(_cached_raw_proxies)
+            random.shuffle(res)
+            return res
+
     print("\n" + "=" * 70)
     print("COLLECTING PUBLIC PROXIES")
     print("=" * 70)
@@ -165,8 +183,14 @@ def collect_proxies() -> List[str]:
             except Exception:
                 pass
 
+    res = list(all_proxies)
+    random.shuffle(res)
+    with _collect_lock:
+        _cached_raw_proxies = list(res)
+        _last_raw_collect_time = time.time()
+
     print(f"\n[+] UNIQUE PROXIES COLLECTED: {len(all_proxies)}")
-    return list(all_proxies)
+    return res
 
 
 def check_proxy(proxy: str, test_url: str = TEST_URL) -> Optional[Dict[str, Any]]:
@@ -194,10 +218,16 @@ def check_proxy(proxy: str, test_url: str = TEST_URL) -> Optional[Dict[str, Any]
         )
         latency = (time.perf_counter() - start) * 1000
         if response.status_code == 200 and latency <= MAX_LATENCY:
-            # For Vietnamobile: ensure it's actually the search result page
+            content = response.text.lower()
+            # Validate that the proxy actually returned the real target page, not a captive/error/ad portal
             if test_url == VNMB_URL:
-                content = response.text.lower()
                 if "vietnamobile" not in content and "<table" not in content:
+                    return None
+            elif test_url == VNP_URL:
+                if "vnpt" not in content and "digishop" not in content:
+                    return None
+            elif test_url == TEST_URL:
+                if "viettel" not in content:
                     return None
             return {"proxy": proxy, "latency": round(latency, 2)}
         return None
@@ -211,12 +241,14 @@ def check_all(proxies: List[str], target_live_count: int = 10, target_name: str 
     print("=" * 70)
 
     live = []
-    total = len(proxies)
+    shuffled_proxies = list(proxies)
+    random.shuffle(shuffled_proxies)
+    total = len(shuffled_proxies)
     completed = 0
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
     try:
-        futures = {executor.submit(check_proxy, proxy, test_url): proxy for proxy in proxies}
+        futures = {executor.submit(check_proxy, proxy, test_url): proxy for proxy in shuffled_proxies}
         for future in concurrent.futures.as_completed(futures):
             completed += 1
             try:
@@ -404,17 +436,14 @@ class VietnamobileProxyPoolManager:
         self.load_local_proxies()
 
     def load_local_proxies(self) -> List[str]:
-        """Load proxies from fast_proxies_vnmb.txt if available, fall back to fast_proxies.txt."""
+        """Load proxies from dedicated fast_proxies_vnmb.txt."""
         loaded = []
-        for filepath in [OUTPUT_FAST_VNMB, OUTPUT_FAST]:
-            if Path(filepath).exists():
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        loaded = [line.strip() for line in f if line.strip()]
-                    if loaded:
-                        break
-                except Exception:
-                    pass
+        if Path(OUTPUT_FAST_VNMB).exists():
+            try:
+                with open(OUTPUT_FAST_VNMB, "r", encoding="utf-8") as f:
+                    loaded = [line.strip() for line in f if line.strip()]
+            except Exception:
+                pass
         self.proxies = loaded
         self.current_index = 0
         return self.proxies
@@ -470,6 +499,96 @@ class VietnamobileProxyPoolManager:
         finally:
             with self._lock:
                 self.is_hunting = False
+
+
+class VinaphoneProxyPoolManager:
+    """Separate singleton proxy pool dedicated to VinaPhone (uses fast_proxies_vnp.txt).
+    Completely independent from ProxyPoolManager (Viettel) and VietnamobileProxyPoolManager
+    so concurrent checks never overwrite each other's rotation index or fast_proxies file.
+    """
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(VinaphoneProxyPoolManager, cls).__new__(cls)
+                cls._instance._init_manager()
+            return cls._instance
+
+    def _init_manager(self):
+        self.proxies: List[str] = []
+        self.current_index = 0
+        self.is_hunting = False
+        self.hunt_attempts = 0
+        self.load_local_proxies()
+
+    def load_local_proxies(self) -> List[str]:
+        """Load proxies from dedicated fast_proxies_vnp.txt."""
+        loaded = []
+        if Path(OUTPUT_FAST_VNP).exists():
+            try:
+                with open(OUTPUT_FAST_VNP, "r", encoding="utf-8") as f:
+                    loaded = [line.strip() for line in f if line.strip()]
+            except Exception:
+                pass
+        self.proxies = loaded
+        self.current_index = 0
+        return self.proxies
+
+    def get_next_proxy(self) -> Optional[str]:
+        """Get the next proxy in rotation without looping past pool bounds."""
+        with self._lock:
+            if not self.proxies or self.current_index >= len(self.proxies):
+                return None
+            proxy = self.proxies[self.current_index]
+            self.current_index += 1
+            return f"http://{proxy}" if not proxy.startswith("http") else proxy
+
+    def get_proxy_count(self) -> int:
+        with self._lock:
+            if not self.proxies:
+                self.load_local_proxies()
+            return len(self.proxies)
+
+    def refresh_proxies(self, target_count: int = 10, max_attempts: int = 5) -> List[str]:
+        """Reset attempts and fetch fresh proxies validated against Vinaphone endpoint."""
+        with self._lock:
+            self.hunt_attempts = 0
+            self.current_index = 0
+            self.is_hunting = False
+        return self.fetch_next_batch(target_count=target_count, max_attempts=max_attempts)
+
+    def fetch_next_batch(self, target_count: int = 10, max_attempts: int = 5) -> List[str]:
+        """Fetch next batch of live proxies validated against Vinaphone URL."""
+        with self._lock:
+            if self.hunt_attempts >= max_attempts:
+                raise RuntimeError(f"❌ Đã thử {max_attempts} đợt Proxy nhưng tất cả đều bị Vinaphone chặn!")
+
+            if self.is_hunting:
+                print("[*] Proxy Hunter cho Vinaphone đang chạy ngầm...", flush=True)
+                return self.proxies
+            self.is_hunting = True
+
+        try:
+            self.hunt_attempts += 1
+            print(f"\n[*] [VNP Đợt cào {self.hunt_attempts}/{max_attempts}] Bắt đầu cào Proxy live mới cho Vinaphone...", flush=True)
+            raw_proxies = collect_proxies()
+            if raw_proxies:
+                live = check_all(raw_proxies, target_live_count=target_count, target_name="Vinaphone", test_url=VNP_URL)
+                if live:
+                    fast_list = save_results(live, output_file=OUTPUT_FAST_VNP)
+                    with self._lock:
+                        self.proxies = fast_list
+                        self.current_index = 0
+                    return self.proxies
+            print(f"[!] VNP Đợt cào {self.hunt_attempts} không tìm thấy proxy live mới.", flush=True)
+            return self.proxies
+        finally:
+            with self._lock:
+                self.is_hunting = False
+
 
 
 def main():

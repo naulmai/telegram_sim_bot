@@ -23,7 +23,7 @@ from curl_cffi import requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Import Proxy Manager
-from proxy_hunter import ProxyPoolManager, VietnamobileProxyPoolManager
+from proxy_hunter import ProxyPoolManager, VietnamobileProxyPoolManager, VinaphoneProxyPoolManager
 
 import functools
 print = functools.partial(print, flush=True)
@@ -46,17 +46,22 @@ class CarrierDetector:
 
     @classmethod
     def get_carrier(cls, formatted_phone: str) -> str:
+        clean = re.sub(r'\D', '', str(formatted_phone))
+        if clean.startswith("84") and len(clean) == 11:
+            clean = "0" + clean[2:]
+        elif not clean.startswith("0") and len(clean) == 9:
+            clean = "0" + clean
         for prefix in cls.VIETTEL_PREFIXES:
-            if formatted_phone.startswith(prefix):
+            if clean.startswith(prefix):
                 return "VIETTEL"
         for prefix in cls.MOBIFONE_PREFIXES:
-            if formatted_phone.startswith(prefix):
+            if clean.startswith(prefix):
                 return "MOBIFONE"
         for prefix in cls.VINAPHONE_PREFIXES:
-            if formatted_phone.startswith(prefix):
+            if clean.startswith(prefix):
                 return "VINAPHONE"
         for prefix in cls.VIETNAMOBILE_PREFIXES:
-            if formatted_phone.startswith(prefix):
+            if clean.startswith(prefix):
                 return "VIETNAMOBILE"
         return "UNKNOWN"
 
@@ -163,7 +168,7 @@ class ViettelApiChecker:
                     print(f"[!] Viettel proxy error ({err_str}). Attempting direct IP fallback...", flush=True)
                     try:
                         direct_session = requests.Session(impersonate="chrome131")
-                        resp = direct_session.post(self.BASE_URL, params=params, headers=self.headers, timeout=10)
+                        resp = direct_session.post(self.BASE_URL, params=params, headers=self.headers, timeout=10, verify=False)
                         if resp.status_code == 200:
                             d = resp.json()
                             if d.get("errorCode") == 0:
@@ -320,13 +325,13 @@ class MobifoneApiChecker:
 
 
 class VinaphoneApiChecker:
-    """Fast backend checker for VinaPhone SIM inventory with proxy rotation support."""
+    """Fast backend checker for VinaPhone SIM inventory with smart retry and proxy rotation support."""
 
     BASE_URL = "https://digishop.vnpt.vn/apiprod/v2/simso/num_search"
 
     def __init__(self, proxy: Optional[str] = None, delay: float = 1.0):
         self.delay = delay
-        self.proxy_pool = ProxyPoolManager()
+        self.proxy_pool = VinaphoneProxyPoolManager()
         self.headers = {
             "accept": "*/*",
             "referer": "https://digishop.vnpt.vn/sim-so?tab=c320",
@@ -342,19 +347,19 @@ class VinaphoneApiChecker:
             self.session.proxies = {"http": proxy, "https": proxy}
 
     def _rotate_proxy(self) -> Optional[str]:
-        """Fetch next live proxy from pool when Vinaphone rate limits the current IP."""
+        """Fetch next live proxy from dedicated Vinaphone pool when IP is blocked."""
         new_proxy = self.proxy_pool.get_next_proxy()
         if not new_proxy:
             print("[!] Proxy Vinaphone het -- Cao dot 10 proxy live moi...", flush=True)
             try:
-                self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=10, target_name="Vinaphone")
+                self.proxy_pool.fetch_next_batch(target_count=10, max_attempts=5)
                 new_proxy = self.proxy_pool.get_next_proxy()
             except RuntimeError as err:
                 print(f"[!] {err}", flush=True)
                 return None
 
         if new_proxy:
-            print(f"[*] Vinaphone bi chan IP -> Doi sang Proxy: {new_proxy}", flush=True)
+            print(f"[*] Vinaphone bi chan/loi IP -> Doi sang Proxy: {new_proxy}", flush=True)
             try:
                 self.session = requests.Session(impersonate="chrome131")
                 self.session.proxies = {"http": new_proxy, "https": new_proxy}
@@ -377,15 +382,19 @@ class VinaphoneApiChecker:
             "commit": "0"
         }
 
-        MAX_RETRIES = 20  # Safety cap to prevent infinite loops
+        MAX_RETRIES = 12  # Safety cap
+        api_error_count = 0
+        MAX_DIRECT_API_RETRIES = 3  # Retry on current IP up to 3 times for transient VNPT backend glitch
+
         try:
-            items = []  # Default in case all retries fail
+            items = []
             attempt = 0
             last_err_msg = "Khong ro nguyen nhan"
             while attempt < MAX_RETRIES:
                 attempt += 1
                 try:
-                    response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=8)
+                    # verify=False prevents curl: (60) SSL certificate errors via proxies
+                    response = self.session.get(self.BASE_URL, params=params, headers=self.headers, timeout=10, verify=False)
                 except Exception as net_err:
                     last_err_msg = str(net_err)
                     print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} loi ket noi ({last_err_msg}), doi proxy...", flush=True)
@@ -398,21 +407,56 @@ class VinaphoneApiChecker:
                     self._rotate_proxy()
                     continue
 
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception as json_err:
+                    last_err_msg = f"JSON decode error: {json_err}"
+                    print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} {last_err_msg}, thu lai...", flush=True)
+                    time.sleep(1.0)
+                    continue
+
                 error_code = data.get("errorCode")
                 if error_code is not None and error_code != 0:
-                    last_err_msg = data.get("message", f"API Error {error_code}")
-                    print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} bi chan IP ({last_err_msg}), doi proxy...", flush=True)
-                    self._rotate_proxy()
-                    continue
+                    last_err_msg = data.get("message") or f"API Error {error_code}"
+                    api_error_count += 1
+                    # Transient VNPT backend busy/glitch (e.g. 'IT error code: ' or -1)
+                    if api_error_count <= MAX_DIRECT_API_RETRIES:
+                        print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} he thong VNPT ban ({last_err_msg}), thu lai sau 1.5s...", flush=True)
+                        time.sleep(1.5)
+                        continue
+                    else:
+                        print(f"  [~] VINAPHONE {clean_num}: Lan {attempt}/{MAX_RETRIES} he thong VNPT loi lien tiep ({last_err_msg}), doi proxy...", flush=True)
+                        self._rotate_proxy()
+                        time.sleep(1.0)
+                        continue
 
                 # errorCode == 0: success
                 items = data.get("data", [])
                 break
             else:
-                # Exhausted all retries
-                print(f"  [!] VINAPHONE {clean_num}: That bai sau {MAX_RETRIES} lan thu -- {last_err_msg}", flush=True)
-                return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": last_err_msg}
+                # If proxy was used and exhausted, attempt a direct connection fallback before failing
+                if getattr(self.session, "proxies", None):
+                    print(f"  [!] VINAPHONE {clean_num}: Proxy that bai. Thu ket noi truc tiep khong qua proxy...", flush=True)
+                    try:
+                        direct_session = requests.Session(impersonate="chrome131")
+                        resp = direct_session.get(self.BASE_URL, params=params, headers=self.headers, timeout=10, verify=False)
+                        if resp.status_code == 200:
+                            d = resp.json()
+                            if d.get("errorCode") == 0:
+                                items = d.get("data") or []
+                            else:
+                                last_err_msg = d.get("message") or f"API Error {d.get('errorCode')}"
+                                print(f"  [!] VINAPHONE {clean_num}: That bai sau {MAX_RETRIES} lan thu -- {last_err_msg}", flush=True)
+                                return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": last_err_msg}
+                        else:
+                            print(f"  [!] VINAPHONE {clean_num}: That bai sau {MAX_RETRIES} lan thu -- {last_err_msg}", flush=True)
+                            return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": last_err_msg}
+                    except Exception as direct_err:
+                        print(f"  [!] VINAPHONE {clean_num}: That bai sau {MAX_RETRIES} lan thu -- {direct_err}", flush=True)
+                        return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": str(direct_err)}
+                else:
+                    print(f"  [!] VINAPHONE {clean_num}: That bai sau {MAX_RETRIES} lan thu -- {last_err_msg}", flush=True)
+                    return {"phone": clean_num, "carrier": "VINAPHONE", "available": None, "error": last_err_msg}
 
             matched_items = []
             for item in items:
